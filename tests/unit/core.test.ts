@@ -1,186 +1,196 @@
 import { HiveSync } from '../../src/core/hivesync-bridge';
-import { BridgeConfig, MessageType } from '../../src/types';
+import { Identity } from '../../src/core/identity';
+import { InMemoryTransport } from '../../src/core/transport';
+import { BridgeConfig, MessageType, Message, AgentIdentity } from '../../src/types';
 
-describe('HiveSync Core', () => {
-  let hivesync: HiveSync;
-  const mockConfig: BridgeConfig = {
-    agentId: 'test-agent-1',
-    agentName: 'Test Agent',
+const TOPIC = '/hivesync-test/1/core/proto';
+
+function makeConfig(agentId: string): BridgeConfig {
+  return {
+    agentId,
+    agentName: agentId,
     storagePath: ':memory:',
-    syncInterval: 0,
+    syncInterval: 0, // no periodic announce noise during tests
     waku: {
       listenAddresses: [],
       bootstrapNodes: [],
-      pubsubTopic: '/test/topic',
+      clusterId: 1,
+      numShardsInCluster: 8,
+      contentTopic: TOPIC,
       keepAlive: false,
       maxPeers: 1,
     },
   };
+}
 
-  beforeEach(() => {
-    hivesync = new HiveSync(mockConfig);
+function makeNode(agentId: string): { node: HiveSync; transport: InMemoryTransport } {
+  const transport = new InMemoryTransport(TOPIC, agentId);
+  const node = new HiveSync(makeConfig(agentId), Identity.ephemeral(agentId, agentId), transport);
+  return { node, transport };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 30));
+async function waitFor(pred: () => boolean, ms = 1000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (pred()) return true;
+    await tick();
+  }
+  return pred();
+}
+
+describe('HiveSync core', () => {
+  let alice: HiveSync;
+  let bob: HiveSync;
+
+  beforeEach(async () => {
+    alice = makeNode('alice').node;
+    bob = makeNode('bob').node;
+    await alice.initialize(0);
+    await bob.initialize(0);
   });
 
   afterEach(async () => {
-    await hivesync.disconnect();
+    await alice.disconnect();
+    await bob.disconnect();
   });
 
-  describe('Initialization', () => {
-    test('should create instance with config', () => {
-      expect(hivesync).toBeInstanceOf(HiveSync);
-      expect(hivesync.getStatus().connected).toBe(false);
-    });
+  test('agents discover each other via ANNOUNCE', async () => {
+    expect(await waitFor(() => bob.getKnownAgents().some((a) => a.id === 'alice'))).toBe(true);
+    expect(await waitFor(() => alice.getKnownAgents().some((a) => a.id === 'bob'))).toBe(true);
 
-    test('should initialize successfully', async () => {
-      // Mock Waku initialization since we can't actually connect in tests
-      const mockWaku = {
-        libp2p: {
-          peerId: { toString: () => 'test-peer-id' },
-          getPeers: () => [],
-        },
-        relay: {
-          addObserver: jest.fn(),
-        },
-        lightPush: {
-          push: jest.fn().mockResolvedValue(undefined),
-        },
-        stop: jest.fn().mockResolvedValue(undefined),
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
-
-      const status = hivesync.getStatus();
-      expect(status.connected).toBe(true);
-      expect(status.peerId).toBe('test-peer-id');
-    });
+    const known = bob.getKnownAgents().find((a) => a.id === 'alice')!;
+    expect(known.publicKey).toBeDefined();
+    expect(known.encPublicKey).toBeDefined();
   });
 
-  describe('Message Handling', () => {
-    test('should register message handlers', () => {
-      const handler = jest.fn();
-      hivesync.onMessage(MessageType.TEXT, handler);
-      
-      // Simulate receiving a message
-      const testMessage = {
-        id: 'test-id',
-        sender: 'sender-1',
-        recipient: 'test-agent-1',
-        type: MessageType.TEXT,
-        content: { text: 'Hello' },
-        timestamp: new Date(),
-        encrypted: false,
-      };
+  test('directed text message reaches only the addressee', async () => {
+    await waitFor(() => alice.getKnownAgents().some((a) => a.id === 'bob'));
 
-      // @ts-ignore - Access private method for testing
-      hivesync.handleIncomingMessage({
-        payload: new TextEncoder().encode(JSON.stringify(testMessage)),
-      });
+    const received: Message[] = [];
+    bob.onMessage(MessageType.TEXT, (m) => received.push(m));
 
-      // Handler won't be called because Waku is mocked
-      // This test verifies the method exists and doesn't throw
-      expect(hivesync.onMessage).toBeDefined();
+    await alice.sendMessage({
+      sender: 'alice',
+      recipient: 'bob',
+      type: MessageType.TEXT,
+      content: { text: 'hi bob' },
+      encrypted: false,
     });
 
-    test('should send message with correct format', async () => {
-      const mockPush = jest.fn().mockResolvedValue(undefined);
-      const mockWaku = {
-        lightPush: { push: mockPush },
-        libp2p: { peerId: { toString: () => 'test-id' } },
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
-
-      const message = {
-        sender: 'test-agent-1',
-        recipient: 'recipient-1',
-        type: MessageType.TEXT,
-        content: { text: 'Test message' },
-        encrypted: true,
-      };
-
-      const messageId = await hivesync.sendMessage(message);
-      
-      expect(messageId).toBeDefined();
-      expect(mockPush).toHaveBeenCalled();
-      
-      const callArgs = mockPush.mock.calls[0][0];
-      expect(callArgs.payload).toBeDefined();
-      expect(callArgs.contentTopic).toBe(mockConfig.waku.pubsubTopic);
-    });
+    expect(await waitFor(() => received.length === 1)).toBe(true);
+    expect(received[0].sender).toBe('alice');
+    expect(received[0].content.text).toBe('hi bob');
   });
 
-  describe('Status Management', () => {
-    test('should return correct status when disconnected', () => {
-      const status = hivesync.getStatus();
-      expect(status.connected).toBe(false);
-      expect(status.peers).toBe(0);
-      expect(status.peerId).toBeUndefined();
+  test('a node does not receive its own broadcasts (self-filter)', async () => {
+    const aliceGot: Message[] = [];
+    alice.onMessage(MessageType.TEXT, (m) => aliceGot.push(m));
+
+    await alice.sendMessage({
+      sender: 'alice',
+      recipient: 'broadcast',
+      type: MessageType.TEXT,
+      content: { text: 'anyone there?' },
+      encrypted: false,
     });
 
-    test('should return correct status when connected', () => {
-      const mockWaku = {
-        libp2p: {
-          peerId: { toString: () => 'connected-peer-id' },
-          getPeers: () => ['peer-1', 'peer-2'],
-        },
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
-
-      const status = hivesync.getStatus();
-      expect(status.connected).toBe(true);
-      expect(status.peerId).toBe('connected-peer-id');
-      expect(status.peers).toBe(2);
-    });
+    await tick();
+    await tick();
+    expect(aliceGot).toHaveLength(0);
   });
 
-  describe('Error Handling', () => {
-    test('should handle initialization errors gracefully', async () => {
-      // Mock failed initialization
-      const originalConsoleError = console.error;
-      console.error = jest.fn();
+  test('end-to-end encrypts directed messages once keys are known', async () => {
+    await waitFor(() => alice.getKnownAgents().some((a) => a.id === 'bob'));
 
-      // Create a config that will cause initialization to fail
-      const invalidConfig = { ...mockConfig, agentId: '' };
-      const invalidHiveSync = new HiveSync(invalidConfig);
-      
-      // Try to initialize (will fail but shouldn't throw)
-      await expect(invalidHiveSync.initialize()).resolves.not.toThrow();
+    const got: Message[] = [];
+    bob.onMessage(MessageType.TEXT, (m) => got.push(m));
 
-      console.error = originalConsoleError;
+    await alice.sendMessage({
+      sender: 'alice',
+      recipient: 'bob',
+      type: MessageType.TEXT,
+      content: { text: 'classified' },
+      encrypted: true,
     });
 
-    test('should handle message sending errors', async () => {
-      // Mock failed message sending
-      const mockPush = jest.fn().mockRejectedValue(new Error('Network error'));
-      const mockWaku = {
-        lightPush: { push: mockPush },
-        libp2p: { peerId: { toString: () => 'test-id' } },
-      };
+    expect(await waitFor(() => got.length === 1)).toBe(true);
+    expect(got[0].encrypted).toBe(true);
+    expect(got[0].content.text).toBe('classified');
+  });
 
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
+  test('drops frames with an invalid signature', async () => {
+    const transport = new InMemoryTransport(TOPIC, 'attacker');
+    await transport.start();
 
-      const message = {
-        sender: 'test-agent-1',
-        recipient: 'recipient-1',
-        type: MessageType.TEXT,
-        content: { text: 'Test' },
-        encrypted: true,
-      };
+    const got: Message[] = [];
+    bob.onMessage(MessageType.TEXT, (m) => got.push(m));
 
-      await expect(hivesync.sendMessage(message)).rejects.toThrow('Network error');
+    // A forged envelope: signed field present but bogus.
+    const forged = {
+      v: 1,
+      id: 'forged-1',
+      from: 'mallory',
+      to: 'bob',
+      type: MessageType.TEXT,
+      ts: Date.now(),
+      spk: Identity.ephemeral('mallory', 'M').signPublicKey,
+      sig: Buffer.from('garbage').toString('base64'),
+      enc: false,
+      body: JSON.stringify({ text: 'spoofed' }),
+    };
+    await transport.publish(Buffer.from(JSON.stringify(forged)));
+
+    await tick();
+    await tick();
+    expect(got).toHaveLength(0);
+    await transport.stop();
+  });
+
+  test('de-duplicates redelivered frames', async () => {
+    await waitFor(() => alice.getKnownAgents().some((a) => a.id === 'bob'));
+    const got: Message[] = [];
+    bob.onMessage(MessageType.TEXT, (m) => got.push(m));
+
+    // Capture a real signed frame Alice emits, then replay it twice.
+    const sniffer = new InMemoryTransport(TOPIC, 'sniffer');
+    await sniffer.start();
+    let frame: Uint8Array | null = null;
+    await sniffer.subscribe((p) => {
+      const env = JSON.parse(Buffer.from(p).toString());
+      if (env.type === MessageType.TEXT && env.from === 'alice') frame = p;
     });
+
+    await alice.sendMessage({
+      sender: 'alice',
+      recipient: 'bob',
+      type: MessageType.TEXT,
+      content: { text: 'dupe-me' },
+      encrypted: false,
+    });
+
+    expect(await waitFor(() => frame !== null)).toBe(true);
+    await sniffer.publish(frame!);
+    await sniffer.publish(frame!);
+    await tick();
+    await tick();
+
+    expect(got.filter((m) => m.content.text === 'dupe-me')).toHaveLength(1);
+    await sniffer.stop();
+  });
+
+  test('fires onAgentDiscovered exactly once per new agent', async () => {
+    const carol = makeNode('carol').node;
+    const discovered: AgentIdentity[] = [];
+    carol.onAgentDiscovered((a) => discovered.push(a));
+    await carol.initialize(0);
+
+    await waitFor(() => discovered.length >= 2, 2000);
+    const ids = discovered.map((d) => d.id).sort();
+    // Discovered alice & bob, each once.
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(expect.arrayContaining(['alice', 'bob']));
+
+    await carol.disconnect();
   });
 });

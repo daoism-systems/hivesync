@@ -6,16 +6,17 @@ import { logger } from './logger';
 
 const DEFAULT_CONFIG: BridgeConfig = {
   agentId: `agent-${Date.now().toString(36)}`,
-  agentName: 'Kai Waku Bridge',
+  agentName: 'HiveSync Agent',
   storagePath: path.join(process.cwd(), 'data', 'hivesync.db'),
-  syncInterval: 5,
+  // Announce/presence interval, in seconds.
+  syncInterval: 30,
   waku: {
     listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
-    bootstrapNodes: [
-      '/dns4/node-01.do-ams3.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ',
-      '/dns4/node-01.gc-us-central1-a.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmJb2e28qLXxT5kZxVUUoJt72EMzNGXB47Rxx5hw3q4YjS',
-    ],
-    pubsubTopic: '/waku/2/default-waku/proto',
+    // Empty => use @waku/sdk's default bootstrap (The Waku Network).
+    bootstrapNodes: [],
+    clusterId: 1,
+    numShardsInCluster: 8,
+    contentTopic: '/hivesync/1/agents/proto',
     keepAlive: true,
     maxPeers: 10,
   },
@@ -107,11 +108,16 @@ export function validateConfig(config: BridgeConfig): string[] {
   if (config.syncInterval < 0) {
     errors.push('Sync interval must be positive');
   }
-  
-  if (!config.waku.bootstrapNodes || config.waku.bootstrapNodes.length === 0) {
-    errors.push('At least one Waku bootstrap node is required');
+
+  // A Waku content topic must look like /{app}/{version}/{topic}/{encoding}.
+  if (!config.waku?.contentTopic || !/^\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(config.waku.contentTopic)) {
+    errors.push('A valid Waku content topic (/{app}/{version}/{topic}/{encoding}) is required');
   }
-  
+
+  if (!config.waku?.clusterId && config.waku?.clusterId !== 0) {
+    errors.push('Waku clusterId is required');
+  }
+
   return errors;
 }
 

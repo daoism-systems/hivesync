@@ -4,6 +4,7 @@ import { StorageManager } from '../storage/storage-manager';
 import { FileWatcher, FileChangeEvent } from './file-watcher';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 
@@ -17,6 +18,9 @@ export class RealTimeSyncManager {
   private isProcessing: boolean = false;
   private syncDebounceTimer: NodeJS.Timeout | null = null;
   private syncDebounceDelay: number = 1000; // 1 second debounce
+  // Paths we just wrote from a remote update — used to suppress the resulting
+  // file-watcher event so a synced note isn't immediately re-broadcast (loop).
+  private remoteWrites: Set<string> = new Set();
 
   constructor(bridge: HiveSync, storage: StorageManager, vaultPath: string) {
     this.bridge = bridge;
@@ -85,6 +89,12 @@ export class RealTimeSyncManager {
       return;
     }
 
+    // Suppress events caused by our own remote-update writes (anti-loop).
+    if (this.remoteWrites.has(filePath)) {
+      this.remoteWrites.delete(filePath);
+      return;
+    }
+
     logger.debug(`File change detected: ${type} ${filePath}`);
 
     // Add to pending changes
@@ -135,7 +145,6 @@ export class RealTimeSyncManager {
       }
 
       // Check if file still exists
-      const fs = require('fs');
       if (!fs.existsSync(fullPath)) {
         // File was deleted
         await this.storage.getNoteByPath(filePath).then(async (note) => {
@@ -179,8 +188,9 @@ export class RealTimeSyncManager {
 
   private async syncChangesWithAgents(changedFiles: string[]): Promise<void> {
     const agents = await this.storage.getAllAgents();
-    
+
     for (const agent of agents) {
+      if (agent.id === this.bridge.agentId) continue; // don't sync with self
       await this.syncChangesWithAgent(agent.id, changedFiles);
     }
   }
@@ -201,7 +211,7 @@ export class RealTimeSyncManager {
       }
 
       const updateMessage = {
-        sender: this.bridge.getStatus().peerId || 'unknown',
+        sender: this.bridge.agentId,
         recipient: agentId,
         type: MessageType.OBSIDIAN_UPDATE,
         content: {
@@ -225,7 +235,7 @@ export class RealTimeSyncManager {
   }
 
   private async handleRemoteUpdate(message: any): Promise<void> {
-    const { notes, timestamp } = message.content;
+    const { notes } = message.content;
     const sender = message.sender;
 
     logger.info(`Received ${notes.length} updates from ${sender}`);
@@ -283,9 +293,11 @@ export class RealTimeSyncManager {
 
   private async applyNoteUpdate(note: ObsidianNote): Promise<void> {
     if (this.fileWatcher) {
+      // Flag the path so the resulting watcher event is ignored (anti-loop).
+      this.remoteWrites.add(note.path);
       await this.fileWatcher.saveNoteContent(note.path, note.content);
     }
-    
+
     await this.storage.saveNote(note);
     await this.storage.markNoteAsSynced(note.id, 'remote-update');
   }
@@ -298,7 +310,7 @@ export class RealTimeSyncManager {
     const modifiedNotes = await this.storage.getModifiedNotes(sinceDate);
 
     const syncResponse = {
-      sender: this.bridge.getStatus().peerId || 'unknown',
+      sender: this.bridge.agentId,
       recipient: message.sender,
       type: MessageType.SYNC_RESPONSE,
       content: {
@@ -320,7 +332,7 @@ export class RealTimeSyncManager {
   }
 
   private async handleSyncResponse(message: any): Promise<void> {
-    const { requestId, notes, timestamp } = message.content;
+    const { notes } = message.content;
     const sender = message.sender;
 
     logger.info(`Processing sync response with ${notes.length} notes from ${sender}`);
@@ -362,8 +374,9 @@ export class RealTimeSyncManager {
   async syncWithAllAgents(): Promise<void> {
     try {
       const agents = await this.storage.getAllAgents();
-      
+
       for (const agent of agents) {
+        if (agent.id === this.bridge.agentId) continue; // don't sync with self
         await this.requestSync(agent.id);
       }
     } catch (error) {
@@ -376,7 +389,7 @@ export class RealTimeSyncManager {
     const lastSyncTime = lastSyncState?.lastSync || new Date(0);
 
     const syncRequest = {
-      sender: this.bridge.getStatus().peerId || 'unknown',
+      sender: this.bridge.agentId,
       recipient: agentId,
       type: MessageType.SYNC_REQUEST,
       content: {

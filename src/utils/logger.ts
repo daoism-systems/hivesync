@@ -4,21 +4,23 @@ import chalk from 'chalk';
 const logLevels = {
   error: 0,
   warn: 1,
-  info: 2,
-  debug: 3,
+  success: 2,
+  info: 3,
+  debug: 4,
 };
 
-const logColors = {
+const logColors: Record<string, string> = {
   error: 'red',
   warn: 'yellow',
-  info: 'green',
+  success: 'green',
+  info: 'cyan',
   debug: 'blue',
 };
 
 const consoleFormat = winston.format.printf(({ level, message, timestamp }) => {
-  const color = logColors[level as keyof typeof logColors] || 'white';
-  const levelText = level.toUpperCase().padEnd(5);
-  return `${chalk.gray(timestamp)} ${chalk[color](levelText)} ${message}`;
+  const color = logColors[level] || 'white';
+  const levelText = level.toUpperCase().padEnd(7);
+  return `${chalk.gray(timestamp as string)} ${(chalk as any)[color](levelText)} ${message}`;
 });
 
 export const logger = winston.createLogger({
@@ -33,24 +35,5 @@ export const logger = winston.createLogger({
     new winston.transports.Console({
       level: process.env.LOG_LEVEL || 'info',
     }),
-    new winston.transports.File({
-      filename: 'logs/hivesync.log',
-      level: 'debug',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-    }),
   ],
-});
-
-// Helper methods for common log types
-export const log = {
-  info: (message: string, ...meta: any[]) => logger.info(message, ...meta),
-  error: (message: string, ...meta: any[]) => logger.error(message, ...meta),
-  warn: (message: string, ...meta: any[]) => logger.warn(message, ...meta),
-  debug: (message: string, ...meta: any[]) => logger.debug(message, ...meta),
-  success: (message: string, ...meta: any[]) => {
-    console.log(chalk.green(`✓ ${message}`));
-  },
-};
+}) as winston.Logger & { success: winston.LeveledLogMethod };

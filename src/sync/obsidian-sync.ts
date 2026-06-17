@@ -1,5 +1,5 @@
 import { MessageType, ObsidianNote, SyncState } from '../types';
-import { HiveSync } from '../core/hivesync';
+import { HiveSync } from '../core/hivesync-bridge';
 import { StorageManager } from '../storage/storage-manager';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
@@ -79,7 +79,7 @@ export class ObsidianSyncManager {
     const lastSyncTime = lastSyncState?.lastSync || new Date(0);
 
     const syncRequest = {
-      sender: this.bridge.getStatus().peerId || 'unknown',
+      sender: this.bridge.agentId,
       recipient: agentId,
       type: MessageType.SYNC_REQUEST,
       content: {
@@ -102,7 +102,7 @@ export class ObsidianSyncManager {
 
     // Prepare sync response
     const syncResponse = {
-      sender: this.bridge.getStatus().peerId || 'unknown',
+      sender: this.bridge.agentId,
       recipient: message.sender,
       type: MessageType.SYNC_RESPONSE,
       content: {
@@ -118,7 +118,7 @@ export class ObsidianSyncManager {
   }
 
   private async handleSyncResponse(message: any): Promise<void> {
-    const { requestId, notes, timestamp } = message.content;
+    const { notes } = message.content;
     const sender = message.sender;
 
     console.log(`Processing ${notes.length} notes from ${sender}`);
@@ -185,7 +185,7 @@ export class ObsidianSyncManager {
     for (const agent of agents) {
       if (agent.id !== message.sender) {
         const updateMessage = {
-          sender: this.bridge.getStatus().peerId || 'unknown',
+          sender: this.bridge.agentId,
           recipient: agent.id,
           type: MessageType.OBSIDIAN_UPDATE,
           content: noteData,

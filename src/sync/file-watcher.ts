@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chokidar from 'chokidar';
-import { ObsidianNote } from '../types';
 import { logger } from '../utils/logger';
 
 export interface FileChangeEvent {

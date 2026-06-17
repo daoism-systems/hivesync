@@ -1,265 +1,167 @@
 import { BridgeManager } from '../../src/core/bridge-manager';
-import { BridgeConfig } from '../../src/types';
+import { InMemoryTransport } from '../../src/core/transport';
+import { BridgeConfig, MessageType } from '../../src/types';
 
-describe('HiveSync Communication Integration', () => {
-  let agent1: BridgeManager;
-  let agent2: BridgeManager;
-  
-  const agent1Config: BridgeConfig = {
-    agentId: 'agent-alpha',
-    agentName: 'Agent Alpha',
-    storagePath: ':memory:',
+const TOPIC = '/hivesync-test/1/integration/proto';
+
+function makeConfig(agentId: string, agentName: string): BridgeConfig {
+  return {
+    agentId,
+    agentName,
+    storagePath: ':memory:', // => ephemeral identity, in-memory db
     syncInterval: 0,
     waku: {
       listenAddresses: [],
       bootstrapNodes: [],
-      pubsubTopic: '/test/communication',
+      clusterId: 1,
+      numShardsInCluster: 8,
+      contentTopic: TOPIC,
       keepAlive: false,
       maxPeers: 2,
     },
   };
+}
 
-  const agent2Config: BridgeConfig = {
-    agentId: 'agent-beta',
-    agentName: 'Agent Beta',
-    storagePath: ':memory:',
-    syncInterval: 0,
-    waku: {
-      listenAddresses: [],
-      bootstrapNodes: [],
-      pubsubTopic: '/test/communication',
-      keepAlive: false,
-      maxPeers: 2,
-    },
-  };
+async function waitFor(pred: () => boolean | Promise<boolean>, ms = 2000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await pred()) return true;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  return Boolean(await pred());
+}
+
+describe('BridgeManager communication (in-memory transport)', () => {
+  let alpha: BridgeManager;
+  let beta: BridgeManager;
 
   beforeEach(async () => {
-    agent1 = new BridgeManager(agent1Config);
-    agent2 = new BridgeManager(agent2Config);
+    alpha = new BridgeManager(makeConfig('agent-alpha', 'Agent Alpha'), new InMemoryTransport(TOPIC, 'agent-alpha'));
+    beta = new BridgeManager(makeConfig('agent-beta', 'Agent Beta'), new InMemoryTransport(TOPIC, 'agent-beta'));
   });
 
   afterEach(async () => {
-    await agent1.stop();
-    await agent2.stop();
+    await alpha.stop();
+    await beta.stop();
   });
 
-  describe('Agent Initialization', () => {
-    test('should initialize agents with unique IDs', async () => {
-      const started1 = await agent1.start();
-      const started2 = await agent2.start();
-
-      expect(started1).toBe(true);
-      expect(started2).toBe(true);
-
-      const status1 = agent1.getStatus();
-      const status2 = agent2.getStatus();
-
-      expect(status1.agentId).toBe('agent-alpha');
-      expect(status2.agentId).toBe('agent-beta');
-      expect(status1.agentName).toBe('Agent Alpha');
-      expect(status2.agentName).toBe('Agent Beta');
-    });
-
-    test('should have different peer IDs', async () => {
-      await agent1.start();
-      await agent2.start();
-
-      const status1 = agent1.getStatus();
-      const status2 = agent2.getStatus();
-
-      // In real Waku network, these would be different
-      // In our mocked environment, they might be undefined
-      expect(status1.waku.peerId).toBeDefined();
-      expect(status2.waku.peerId).toBeDefined();
-    });
+  test('both agents start and report running', async () => {
+    expect(await alpha.start()).toBe(true);
+    expect(await beta.start()).toBe(true);
+    const status = await alpha.getStatus();
+    expect(status.running).toBe(true);
+    expect(status.agentId).toBe('agent-alpha');
+    expect(status.hivesync).toHaveProperty('connected', true);
+    expect(status.hivesync).toHaveProperty('knownAgents');
   });
 
-  describe('Message Exchange', () => {
-    test('should send and receive text messages', async () => {
-      await agent1.start();
-      await agent2.start();
-
-      // Mock message reception for agent2
-      let receivedMessage: any = null;
-      // @ts-ignore - Access private property
-      agent2.wakuBridge.onMessage = jest.fn((type, handler) => {
-        if (type === 'text') {
-          // Simulate receiving a message
-          handler({
-            id: 'test-message-id',
-            sender: 'agent-alpha',
-            recipient: 'agent-beta',
-            type: 'text',
-            content: { text: 'Hello from Alpha!' },
-            timestamp: new Date(),
-            encrypted: true,
-          });
-          receivedMessage = { type, handler };
-        }
-      });
-
-      // Send message from agent1 to agent2
-      const messageId = await agent1.sendTextMessage('agent-beta', 'Hello from Alpha!');
-      
-      expect(messageId).toBeDefined();
-      expect(typeof messageId).toBe('string');
-      expect(messageId.length).toBeGreaterThan(0);
-
-      // Verify agent2 received the message (through our mock)
-      expect(receivedMessage).not.toBeNull();
-      expect(receivedMessage.type).toBe('text');
-    });
-
-    test('should handle broadcast messages', async () => {
-      await agent1.start();
-
-      // Mock broadcast reception
-      let broadcastReceived = false;
-      // @ts-ignore - Access private property
-      agent1.wakuBridge.onMessage = jest.fn((type, handler) => {
-        if (type === 'text') {
-          // Simulate receiving a broadcast
-          handler({
-            id: 'broadcast-id',
-            sender: 'agent-alpha',
-            recipient: 'broadcast',
-            type: 'text',
-            content: { text: 'Hello everyone!' },
-            timestamp: new Date(),
-            encrypted: false,
-          });
-          broadcastReceived = true;
-        }
-      });
-
-      const broadcastId = await agent1.broadcastMessage('Hello everyone!');
-      
-      expect(broadcastId).toBeDefined();
-      expect(broadcastReceived).toBe(true);
-    });
+  test('agents discover each other', async () => {
+    await alpha.start();
+    await beta.start();
+    expect(await waitFor(() => alpha.getKnownAgents().some((a) => a.id === 'agent-beta'))).toBe(true);
+    expect(await waitFor(() => beta.getKnownAgents().some((a) => a.id === 'agent-alpha'))).toBe(true);
   });
 
-  describe('Command Handling', () => {
-    test('should send and process commands', async () => {
-      await agent1.start();
-      await agent2.start();
+  test('delivers an encrypted directed text message end to end', async () => {
+    await alpha.start();
+    await beta.start();
+    expect(await alpha.waitForAgent('agent-beta', 2000)).toBe(true);
 
-      // Mock command reception for agent2
-      let receivedCommand: any = null;
-      // @ts-ignore - Access private property
-      agent2.wakuBridge.onMessage = jest.fn((type, handler) => {
-        if (type === 'command') {
-          // Simulate receiving a command
-          handler({
-            id: 'command-id',
-            sender: 'agent-alpha',
-            recipient: 'agent-beta',
-            type: 'command',
-            content: { command: 'status', args: {} },
-            timestamp: new Date(),
-            encrypted: true,
-          });
-          receivedCommand = { type, handler };
-        }
-      });
+    await alpha.sendTextMessage('agent-beta', 'hello beta');
 
-      const commandId = await agent1.sendCommand('agent-beta', 'status');
-      
-      expect(commandId).toBeDefined();
-      expect(receivedCommand).not.toBeNull();
-      expect(receivedCommand.type).toBe('command');
+    const received = await waitFor(async () => {
+      const msgs = await beta.getUnreadMessages();
+      return msgs.some((m) => m.type === MessageType.TEXT && m.content.text === 'hello beta');
     });
+    expect(received).toBe(true);
 
-    test('should handle sync commands', async () => {
-      await agent1.start();
-
-      // Mock sync command handling
-      let syncCommandSent = false;
-      // @ts-ignore - Access private property
-      agent1.wakuBridge.sendMessage = jest.fn().mockImplementation((message) => {
-        if (message.type === 'command' && message.content.command === 'sync') {
-          syncCommandSent = true;
-        }
-        return Promise.resolve('mock-message-id');
-      });
-
-      await agent1.sendCommand('broadcast', 'sync');
-      
-      expect(syncCommandSent).toBe(true);
-    });
+    const msgs = await beta.getUnreadMessages();
+    const text = msgs.find((m) => m.content.text === 'hello beta')!;
+    expect(text.sender).toBe('agent-alpha');
+    expect(text.encrypted).toBe(true); // beta's key was known => encrypted
   });
 
-  describe('Status Monitoring', () => {
-    test('should provide accurate status information', async () => {
-      await agent1.start();
+  test('supports a bidirectional exchange (reply)', async () => {
+    await alpha.start();
+    await beta.start();
+    expect(await alpha.waitForAgent('agent-beta', 2000)).toBe(true);
+    expect(await beta.waitForAgent('agent-alpha', 2000)).toBe(true);
 
-      const status = agent1.getStatus();
-      
-      expect(status).toHaveProperty('running');
-      expect(status).toHaveProperty('agentId');
-      expect(status).toHaveProperty('agentName');
-      expect(status).toHaveProperty('waku');
-      expect(status).toHaveProperty('obsidianSync');
-      
-      expect(status.running).toBe(true);
-      expect(status.agentId).toBe('agent-alpha');
-      expect(status.agentName).toBe('Agent Alpha');
-      expect(status.waku).toHaveProperty('connected');
-      expect(status.waku).toHaveProperty('peers');
-      expect(status.waku).toHaveProperty('peerId');
+    // beta replies as soon as it hears from alpha
+    beta.on('text', async (m) => {
+      if (m.sender === 'agent-alpha') await beta.sendTextMessage('agent-alpha', 'got it');
     });
 
-    test('should handle unread messages', async () => {
-      await agent1.start();
+    await alpha.sendTextMessage('agent-beta', 'hello?');
 
-      // Initially should have no unread messages
-      const initialMessages = await agent1.getUnreadMessages();
-      expect(initialMessages).toHaveLength(0);
-
-      // Mock saving a message
-      // @ts-ignore - Access private property
-      agent1.storage.saveMessage = jest.fn().mockResolvedValue(undefined);
-      // @ts-ignore - Access private property
-      agent1.storage.getUnreadMessages = jest.fn().mockResolvedValue([
-        {
-          id: 'test-message',
-          sender: 'agent-beta',
-          recipient: 'agent-alpha',
-          type: 'text',
-          content: { text: 'Test message' },
-          timestamp: new Date(),
-          encrypted: true,
-        }
-      ]);
-
-      const messages = await agent1.getUnreadMessages();
-      expect(messages).toHaveLength(1);
-      expect(messages[0].sender).toBe('agent-beta');
-      expect(messages[0].content.text).toBe('Test message');
+    const gotReply = await waitFor(async () => {
+      const msgs = await alpha.getUnreadMessages();
+      return msgs.some((m) => m.content.text === 'got it');
     });
+    expect(gotReply).toBe(true);
   });
 
-  describe('Error Recovery', () => {
-    test('should handle failed message sending gracefully', async () => {
-      await agent1.start();
+  test('records both sides of a conversation in history', async () => {
+    await alpha.start();
+    await beta.start();
+    expect(await alpha.waitForAgent('agent-beta', 2000)).toBe(true);
 
-      // Mock failed message sending
-      // @ts-ignore - Access private property
-      agent1.wakuBridge.sendMessage = jest.fn().mockRejectedValue(new Error('Network error'));
+    await alpha.sendTextMessage('agent-beta', 'first');
+    await waitFor(async () => (await beta.getUnreadMessages()).some((m) => m.content.text === 'first'));
+    await beta.sendTextMessage('agent-alpha', 'second');
+    await waitFor(async () => (await alpha.getUnreadMessages()).some((m) => m.content.text === 'second'));
 
-      await expect(
-        agent1.sendTextMessage('agent-beta', 'Test message')
-      ).rejects.toThrow('Network error');
-    });
+    const convo = await alpha.getConversation('agent-beta');
+    const texts = convo.map((m) => m.content.text);
+    expect(texts).toEqual(expect.arrayContaining(['first', 'second']));
+    // outgoing 'first' is attributed to us, incoming 'second' to the peer
+    expect(convo.find((m) => m.content.text === 'first')!.sender).toBe('agent-alpha');
+    expect(convo.find((m) => m.content.text === 'second')!.sender).toBe('agent-beta');
+  });
 
-    test('should handle storage errors gracefully', async () => {
-      await agent1.start();
+  test('broadcast reaches the other agent but not the sender', async () => {
+    await alpha.start();
+    await beta.start();
+    await alpha.waitForAgent('agent-beta', 2000);
 
-      // Mock storage error
-      // @ts-ignore - Access private property
-      agent1.storage.getUnreadMessages = jest.fn().mockRejectedValue(new Error('Database error'));
+    await alpha.broadcastMessage('hello everyone');
 
-      await expect(agent1.getUnreadMessages()).rejects.toThrow('Database error');
+    expect(
+      await waitFor(async () => {
+        const msgs = await beta.getUnreadMessages();
+        return msgs.some((m) => m.content.text === 'hello everyone');
+      })
+    ).toBe(true);
+
+    // Alice keeps her own outgoing copy, but self-filtering means no network
+    // echo — so there's exactly one copy and it's attributed to her.
+    const alphaCopies = (await alpha.getBroadcasts()).filter((m) => m.content.text === 'hello everyone');
+    expect(alphaCopies).toHaveLength(1);
+    expect(alphaCopies[0].sender).toBe('agent-alpha');
+  });
+
+  test('command messages trigger handled responses', async () => {
+    await alpha.start();
+    await beta.start();
+    await alpha.waitForAgent('agent-beta', 2000);
+
+    await alpha.sendCommand('agent-beta', 'help');
+
+    // beta should respond with a text message back to alpha
+    expect(
+      await waitFor(async () => {
+        const msgs = await alpha.getUnreadMessages();
+        return msgs.some((m) => typeof m.content.text === 'string' && m.content.text.includes('Commands'));
+      })
+    ).toBe(true);
+  });
+
+  describe('lifecycle', () => {
+    test('stop is safe before start and idempotent', async () => {
+      await expect(alpha.stop()).resolves.not.toThrow();
+      await alpha.start();
+      await alpha.stop();
+      await expect(alpha.stop()).resolves.not.toThrow();
     });
   });
 });

@@ -22,6 +22,10 @@ logs/
 *.log
 *.pid
 
+# Local config (may contain access-control password hash) & setup marker
+config/
+.setup-complete
+
 # IDE files
 .vscode/
 .idea/

@@ -4,7 +4,9 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import yaml from 'yaml';
 import { BridgeConfig } from './types';
+import { hashPassword } from './core/crypto';
 import { logger } from './utils/logger';
 
 export async function runSetupWizard(): Promise<void> {
@@ -29,6 +31,28 @@ export async function runSetupWizard(): Promise<void> {
       name: 'storagePath',
       message: 'Where should data be stored?',
       default: path.join(process.cwd(), 'data', 'hivesync.db'),
+    },
+    {
+      type: 'confirm',
+      name: 'requirePassword',
+      message: 'Require a password for others to send your agent actionable (executed) messages?',
+      default: true,
+    },
+    {
+      type: 'password',
+      name: 'accessPassword',
+      message: 'Set your agent access password (others must know it to reach you):',
+      mask: '*',
+      when: (answers) => answers.requirePassword,
+      validate: (input: string) =>
+        input && input.length >= 4 ? true : 'Use at least 4 characters',
+    },
+    {
+      type: 'input',
+      name: 'autoReply',
+      message: 'Automated reply to send on a trusted message (blank for none):',
+      when: (answers) => answers.requirePassword,
+      default: '✓ received',
     },
     {
       type: 'confirm',
@@ -96,36 +120,36 @@ export async function runSetupWizard(): Promise<void> {
       agentId: answers.agentId,
       agentName: answers.agentName,
       storagePath: answers.storagePath,
-      syncInterval: answers.enableRealtimeSync ? 1 : 0, // 1 minute interval for periodic checks
+      syncInterval: 30, // presence announce interval (seconds)
       waku: {
         listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
+        // Empty => default bootstrap (The Waku Network).
         bootstrapNodes: answers.useCustomNodes
           ? answers.customNodes.split('\n').filter((n: string) => n.trim())
-          : [
-              '/dns4/node-01.do-ams3.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ',
-              '/dns4/node-01.gc-us-central1-a.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmJb2e28qLXxT5kZxVUUoJt72EMzNGXB47Rxx5hw3q4YjS',
-            ],
-        pubsubTopic: '/waku/2/hivesync/proto',
+          : [],
+        clusterId: 1,
+        numShardsInCluster: 8,
+        contentTopic: '/hivesync/1/agents/proto',
         keepAlive: true,
         maxPeers: 10,
       },
     };
 
+    // Access-control password (store only the scrypt salt+hash).
+    if (answers.requirePassword && answers.accessPassword) {
+      const { salt, hash } = hashPassword(answers.accessPassword);
+      config.auth = {
+        salt,
+        hash,
+        autoReply: (answers.autoReply || '').trim() || undefined,
+      };
+    }
+
     // Add Obsidian configuration if enabled
     if (answers.enableRealtimeSync) {
-      (config as any).obsidian = {
+      config.obsidian = {
         vaultPath: answers.obsidianPath,
-        syncDebounceDelay: answers.syncDebounceDelay,
-        autoSync: true,
-        ignorePatterns: [
-          '.trash/**',
-          '.obsidian/**',
-          '.git/**',
-          '*.tmp',
-          '*.swp',
-          '*.swo',
-          '*.DS_Store'
-        ],
+        enabled: true,
       };
     }
 
@@ -143,9 +167,8 @@ export async function runSetupWizard(): Promise<void> {
 
     // Save config
     const configPath = path.join(configDir, 'hivesync.yaml');
-    const yaml = require('yaml');
     const yamlStr = yaml.stringify(config);
-    
+
     fs.writeFileSync(configPath, yamlStr, 'utf-8');
 
     // Create .env file if needed
@@ -231,7 +254,12 @@ For help, visit: https://github.com/clawbotl37/hivesync`;
     console.log(chalk.white(`Agent ID: ${answers.agentId}`));
     console.log(chalk.white(`Agent Name: ${answers.agentName}`));
     console.log(chalk.white(`Storage: ${answers.storagePath}`));
-    
+    console.log(
+      chalk.white(
+        `Access control: ${answers.requirePassword ? 'password required 🔒' : 'open (no password)'}`
+      )
+    );
+
     if (answers.enableRealtimeSync) {
       console.log(chalk.white(`Obsidian Vault: ${answers.obsidianPath}`));
       console.log(chalk.white(`Real-time Sync: Enabled`));
