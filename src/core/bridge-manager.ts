@@ -148,10 +148,6 @@ export class BridgeManager extends EventEmitter {
       await this.storage.saveMessage(msg);
       this.emit('text', msg);
       this.emit('message', msg);
-      // Automated reply for trusted messages (not for auto-replies — anti-loop).
-      if (this.config.auth?.autoReply && !isAuto) {
-        await this.sendText(msg.sender, this.config.auth.autoReply, { auto: true }).catch(() => undefined);
-      }
     });
 
     this.hivesync.onMessage(MessageType.COMMAND, async (message) => {
