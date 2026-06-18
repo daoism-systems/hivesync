@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import chalk from 'chalk';
-import figlet from 'figlet';
-import boxen from 'boxen';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import sqlite3 from 'sqlite3';
@@ -12,32 +10,22 @@ import { startTui } from './utils/tui';
 import { loadConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { runSetupWizard } from './setup-wizard';
+import { printBanner } from './utils/ascii';
+import { runConnectSequence } from './utils/splash';
 
 const program = new Command();
 
-// ASCII Art Banner
-console.log(
-  chalk.blue(
-    figlet.textSync('HiveSync', {
-      font: 'Standard',
-      horizontalLayout: 'default',
-      verticalLayout: 'default',
-    })
-  )
-);
-
-console.log(
-  boxen(
-    chalk.green('Real-time secure communication for Kai and agents\n') +
-      chalk.yellow('🔗 End-to-end encrypted • 📝 Real-time Obsidian sync • 🤖 Multi-agent'),
-    {
-      padding: 1,
-      margin: 1,
-      borderStyle: 'round',
-      borderColor: 'blue',
-    }
-  )
-);
+// The interactive TUI paints its own "connecting to the hivemind" splash, so
+// only show the static banner for the plain/utility commands.
+const isInteractiveStart =
+  process.argv[2] === 'start' &&
+  process.stdout.isTTY &&
+  !process.argv.includes('--plain') &&
+  !process.argv.includes('-d') &&
+  !process.argv.includes('--daemon');
+if (!isInteractiveStart) {
+  printBanner();
+}
 
 program
   .name('hivesync')
@@ -54,25 +42,32 @@ program
   .option('--no-sync', 'Disable real-time Obsidian sync')
   .action(async (options) => {
     try {
-      logger.info('Starting HiveSync Bridge with real-time sync...');
-      
       const config = await loadConfig(options.config);
-      
+
       // Override sync if disabled via CLI
       if (options.sync === false) {
         config.syncInterval = 0;
       }
-      
+
       const bridge = new BridgeManager(config);
+      const interactive = !options.daemon && !options.plain && process.stdout.isTTY;
+
+      if (interactive) {
+        // Telegram-style messaging UI, preceded by the connect-to-hivemind
+        // splash (which performs the real bridge.start() under the animation).
+        await runConnectSequence(bridge, config);
+        await startTui(bridge);
+        return;
+      }
+
+      logger.info('Starting HiveSync Bridge with real-time sync...');
       const started = await bridge.start();
-      
       if (!started) {
         logger.error('Failed to start bridge');
         process.exit(1);
       }
-      
       logger.success(`Bridge started successfully! Agent ID: ${config.agentId}`);
-      
+
       if (options.daemon) {
         logger.info('Running in daemon mode...');
         // Keep process alive
@@ -81,12 +76,9 @@ program
           await bridge.stop();
           process.exit(0);
         });
-      } else if (options.plain || !process.stdout.isTTY) {
+      } else {
         // Scriptable line-based REPL (also used by non-TTY / piped sessions).
         await setupInteractiveMode(bridge);
-      } else {
-        // Interactive messaging UI: contacts → chat → commands.
-        await startTui(bridge);
       }
     } catch (error) {
       logger.error('Failed to start bridge:', error);

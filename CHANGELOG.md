@@ -5,6 +5,21 @@ All notable changes to HiveSync will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **New interface** — a Telegram-Desktop-flavoured terminal messenger. The
+  messaging UI is now a persistent two-pane layout (chat list sidebar +
+  conversation pane) with a coloured status top bar (live relay/agent counts),
+  monogram "avatars", left/right message bubbles, day dividers, and live
+  contact search (`/`).
+- **"Connecting to the hivemind"** boot splash — an animated honeycomb +
+  step-by-step connection ceremony (forge identity → derive keys → dial Waku →
+  listen for the swarm) wired to the real `bridge.start()`, shown before the
+  TUI opens.
+- Themed ASCII banner (blue gradient `ANSI Shadow` wordmark + honeycomb) for
+  the non-interactive commands.
+
 ## [2.0.0] - 2026-06-17
 
 A near-complete rewrite of the networking core to make HiveSync actually run

@@ -2,19 +2,22 @@ import * as blessed from 'blessed';
 import { BridgeManager } from '../core/bridge-manager';
 import { Message, AgentIdentity } from '../types';
 import { logger } from './logger';
+import { TG, avatarColor, initials, honeycombSmall } from './ascii';
 
 const BROADCAST = 'broadcast';
 const QUARANTINE = 'quarantine';
+const SIDEBAR_W = 30;
 
 /**
- * A small terminal messaging app over HiveSync.
+ * A Telegram-Desktop-flavoured terminal messenger over HiveSync.
  *
- *   Contacts list  --Enter-->  Chat  --Esc-->  back to Contacts
- *                  --?------>  Commands/help --Esc--> back
+ * Two persistent panes — a chat list on the left, the open conversation on the
+ * right — with a coloured top bar (connection status), monogram "avatars",
+ * left/right message bubbles, live search, and modal overlays for help and the
+ * per-peer password prompt.
  *
- * Humans get an interactive UI; agents get the same capabilities via the
- * event-driven {@link BridgeManager} API (`on('text'|'agentDiscovered')`,
- * `sendTextMessage`, `getConversation`), so this view is purely additive.
+ * Humans get this UI; agents get the same capabilities through the
+ * event-driven {@link BridgeManager} API, so this view is purely additive.
  */
 export async function startTui(
   bridge: BridgeManager,
@@ -27,24 +30,27 @@ export async function startTui(
     smartCSR: true,
     fullUnicode: true,
     title: 'HiveSync',
+    autoPadding: true,
     ...screenOptions,
   });
 
   const unread = new Map<string, number>();
-  let view: 'contacts' | 'chat' | 'help' | 'password' | 'quarantine' = 'contacts';
+  const lastMsg = new Map<string, string>(); // peer → last message preview
+  let view: 'chat' | 'quarantine' | 'empty' = 'empty';
   let openPeer: string | null = null;
   let pendingPeer: string | null = null;
-  // Maps a contacts-list row index to a peer id ('broadcast' or an agentId).
+  let filter = '';
   let rowToPeer: string[] = [];
 
-  const header = blessed.box({
+  // ===================================================================== bars
+  const topBar = blessed.box({
     parent: screen,
     top: 0,
     left: 0,
     height: 1,
     width: '100%',
     tags: true,
-    style: { fg: 'black', bg: 'cyan' },
+    style: { fg: 'white', bg: TG.blueDark },
   });
 
   const footer = blessed.box({
@@ -54,97 +60,126 @@ export async function startTui(
     height: 1,
     width: '100%',
     tags: true,
-    style: { fg: 'white', bg: 'blue' },
+    style: { fg: TG.muted, bg: TG.panel },
   });
 
-  // --- Contacts view -------------------------------------------------------
-  const contacts = blessed.list({
+  // ================================================================= sidebar
+  const sidebar = blessed.box({
     parent: screen,
     top: 1,
     bottom: 1,
     left: 0,
-    width: '100%',
+    width: SIDEBAR_W,
+    style: { bg: TG.panel },
+  });
+
+  const search = blessed.textbox({
+    parent: sidebar,
+    top: 0,
+    left: 0,
+    width: SIDEBAR_W,
+    height: 1,
+    inputOnFocus: true,
+    keys: true,
+    style: { fg: 'white', bg: TG.ink },
+  });
+
+  const chats = blessed.list({
+    parent: sidebar,
+    top: 1,
+    bottom: 0,
+    left: 0,
+    width: SIDEBAR_W,
     keys: true,
     vi: true,
     mouse: true,
     tags: true,
-    style: { selected: { bg: 'cyan', fg: 'black' }, item: { fg: 'white' } },
+    scrollbar: { ch: ' ', style: { bg: TG.blueDark } } as any,
+    style: {
+      bg: TG.panel,
+      selected: { bg: TG.blueDark, fg: 'white' },
+      item: { fg: 'white' },
+    },
   });
 
-  // --- Chat view -----------------------------------------------------------
-  const chatLog = blessed.log({
+  // ============================================================== chat pane
+  const chatHeader = blessed.box({
     parent: screen,
     top: 1,
-    left: 0,
-    width: '100%',
+    left: SIDEBAR_W,
+    right: 0,
+    height: 1,
+    tags: true,
+    style: { fg: 'white', bg: TG.ink },
+  });
+
+  const chatLog = blessed.log({
+    parent: screen,
+    top: 2,
+    left: SIDEBAR_W,
+    right: 0,
     bottom: 4,
     tags: true,
     scrollable: true,
     alwaysScroll: true,
-    scrollbar: { ch: ' ', style: { bg: 'cyan' } } as any,
+    scrollbar: { ch: ' ', style: { bg: TG.blueDark } } as any,
     mouse: true,
     keys: true,
-    hidden: true,
+    padding: { left: 1, right: 1 },
+    style: { bg: TG.ink },
   });
 
   const input = blessed.textbox({
     parent: screen,
     bottom: 1,
-    left: 0,
-    width: '100%',
+    left: SIDEBAR_W,
+    right: 0,
     height: 3,
     border: { type: 'line' },
-    label: ' message (Enter to send · Esc to go back) ',
+    label: ' write a message ',
     inputOnFocus: true,
     keys: true,
     mouse: true,
-    style: { border: { fg: 'cyan' } },
-    hidden: true,
+    style: { fg: 'white', bg: TG.ink, border: { fg: TG.blue } },
   });
 
-  // --- Help view -----------------------------------------------------------
+  // ============================================================== overlays
   const help = blessed.box({
     parent: screen,
-    top: 1,
-    bottom: 1,
-    left: 0,
-    width: '100%',
+    top: 'center',
+    left: 'center',
+    width: 64,
+    height: 22,
+    border: { type: 'line' },
     tags: true,
-    padding: { left: 2, top: 1 },
+    padding: { left: 2, right: 2, top: 1 },
+    label: ' HiveSync · keys ',
     hidden: true,
+    style: { fg: 'white', bg: TG.panel, border: { fg: TG.blue } },
     content: helpText(),
   });
 
-  // --- Quarantine view (read-only) ----------------------------------------
-  const quarantineLog = blessed.log({
-    parent: screen,
-    top: 1,
-    bottom: 1,
-    left: 0,
-    width: '100%',
-    tags: true,
-    scrollable: true,
-    alwaysScroll: true,
-    mouse: true,
-    keys: true,
-    padding: { left: 1 },
-    hidden: true,
-  });
-
-  // --- Password prompt overlay --------------------------------------------
   const pwPrompt = blessed.box({
     parent: screen,
     top: 'center',
     left: 'center',
-    width: '70%',
-    height: 7,
+    width: 60,
+    height: 8,
     border: { type: 'line' },
     tags: true,
-    label: ' password ',
-    style: { border: { fg: 'yellow' } },
+    label: ' 🔑 password ',
     hidden: true,
+    style: { fg: 'white', bg: TG.panel, border: { fg: TG.blue } },
   });
-  const pwLabel = blessed.text({ parent: pwPrompt, top: 0, left: 1, right: 1, tags: true });
+  const pwLabel = blessed.text({
+    parent: pwPrompt,
+    top: 0,
+    left: 1,
+    right: 1,
+    height: 3,
+    tags: true,
+    style: { bg: TG.panel },
+  });
   const pwInput = blessed.textbox({
     parent: pwPrompt,
     bottom: 1,
@@ -154,121 +189,220 @@ export async function startTui(
     inputOnFocus: true,
     censor: true,
     keys: true,
-    style: { fg: 'white', bg: 'black' },
+    style: { fg: 'white', bg: TG.ink },
   });
 
-  // --- rendering helpers ---------------------------------------------------
-  function setHeader(text: string): void {
-    header.setContent(` {bold}HiveSync{/bold}  ${text}`);
-  }
-
-  function setFooter(text: string): void {
-    footer.setContent(` ${text}`);
-  }
-
-  function shortId(id: string): string {
-    return id.length > 22 ? `${id.slice(0, 19)}…` : id;
-  }
-
+  // ===================================================== rendering helpers
   function nameFor(id: string): string {
-    if (id === BROADCAST) return '📢 Broadcast';
+    if (id === BROADCAST) return 'Hive Broadcast';
+    if (id === QUARANTINE) return 'Quarantine';
     const a = bridge.getKnownAgents().find((x) => x.id === id);
     return a ? a.name : id;
-  }
-
-  function refreshContacts(): void {
-    const agents = bridge
-      .getKnownAgents()
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    rowToPeer = [BROADCAST, QUARANTINE, ...agents.map((a) => a.id)];
-
-    const items = [
-      `{yellow-fg}📢 Broadcast{/yellow-fg}${badge(BROADCAST)}`,
-      `{red-fg}🚫 Quarantine{/red-fg}${badge(QUARANTINE)}`,
-      ...agents.map((a) => `{cyan-fg}${a.name}{/cyan-fg} {gray-fg}(${shortId(a.id)}){/gray-fg}${badge(a.id)}`),
-    ];
-    if (agents.length === 0) {
-      items.push('{gray-fg}— no agents discovered yet, listening…{/gray-fg}');
-    }
-    contacts.setItems(items);
-    screen.render();
-  }
-
-  function badge(peer: string): string {
-    const n = unread.get(peer) || 0;
-    return n > 0 ? `  {red-fg}{bold}(${n}){/bold}{red-fg}{/red-fg}` : '';
   }
 
   function escapeTags(s: string): string {
     return String(s).replace(/[{}]/g, '');
   }
 
-  function renderMessage(m: Message): void {
-    const me = m.sender === bridge.agentId;
-    const who = me ? '{green-fg}you{/green-fg}' : `{cyan-fg}${escapeTags(nameFor(m.sender))}{/cyan-fg}`;
-    const lock = m.encrypted ? '🔒' : '✉️ ';
-    const t = new Date(m.timestamp);
-    const time = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
-    chatLog.add(`{gray-fg}${time}{/gray-fg} ${lock} ${who}: ${escapeTags(m.content?.text ?? '')}`);
+  function badge(peer: string): string {
+    const n = unread.get(peer) || 0;
+    return n > 0 ? ` {${TG.blue}-bg}{white-fg} ${n} {/}` : '';
   }
 
-  // --- view switching ------------------------------------------------------
-  function showContacts(): void {
-    view = 'contacts';
+  // One contact "card" — single row (blessed lists count one item per row):
+  // a coloured monogram "avatar", the name, and an unread badge.
+  function chatRow(id: string, opts: { glyph?: string; color?: string } = {}): string {
+    const name = nameFor(id);
+    const color = opts.color || avatarColor(name);
+    const mono = opts.glyph || initials(name);
+    const av = `{${color}-fg}({bold}${mono}{/bold}){/}`;
+    const room = SIDEBAR_W - 7; // minus avatar + padding
+    const label = escapeTags(name).slice(0, room);
+    return `${av} ${label}${badge(id)}`;
+  }
+
+  function refreshContacts(): void {
+    const q = filter.trim().toLowerCase();
+    const agents = bridge
+      .getKnownAgents()
+      .slice()
+      .filter((a) => !q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    rowToPeer = [];
+    const items: string[] = [];
+
+    if (!q) {
+      rowToPeer.push(BROADCAST, QUARANTINE);
+      items.push(chatRow(BROADCAST, { glyph: '#', color: TG.blueLight }));
+      items.push(chatRow(QUARANTINE, { glyph: '!', color: '#E17076' }));
+    }
+
+    for (const a of agents) {
+      rowToPeer.push(a.id);
+      items.push(chatRow(a.id));
+    }
+
+    if (agents.length === 0 && q) {
+      items.push(`{${TG.muted}-fg}  no matches{/}`);
+    } else if (bridge.getKnownAgents().length === 0) {
+      items.push(`{${TG.muted}-fg}  listening for agents…{/}`);
+    }
+
+    chats.setItems(items);
+    screen.render();
+  }
+
+  function setFooter(text: string): void {
+    footer.setContent(` ${text}`);
+  }
+
+  async function refreshTopBar(): Promise<void> {
+    let dot = `{${TG.muted}-fg}●{/}`;
+    let info = 'connecting…';
+    try {
+      const s = await bridge.getStatus();
+      const peers = s?.hivesync?.peers ?? 0;
+      const agents = bridge.getKnownAgents().length;
+      dot = s?.hivesync?.connected ? `{${TG.online}-fg}●{/}` : `{red-fg}●{/}`;
+      info = `${peers} relay${peers === 1 ? '' : 's'} · ${agents} agent${agents === 1 ? '' : 's'}`;
+    } catch {
+      /* best-effort */
+    }
+    topBar.setContent(
+      ` ${dot} {bold}HiveSync{/bold}  {/}` +
+        `{|}{white-fg}🐝 the hivemind{/}  ` +
+        `{${TG.blueLight}-fg}${info}{/} `
+    );
+    screen.render();
+  }
+
+  function wrapText(text: string, width: number): string[] {
+    const out: string[] = [];
+    for (const para of text.split('\n')) {
+      if (para.length === 0) {
+        out.push('');
+        continue;
+      }
+      let line = '';
+      for (const word of para.split(' ')) {
+        if (line.length === 0) line = word;
+        else if ((line + ' ' + word).length <= width) line += ' ' + word;
+        else {
+          out.push(line);
+          line = word;
+        }
+        // hard-break very long words
+        while (line.length > width) {
+          out.push(line.slice(0, width));
+          line = line.slice(width);
+        }
+      }
+      if (line.length) out.push(line);
+    }
+    return out;
+  }
+
+  // Render one message as a Telegram-style bubble inside the chat log.
+  function renderMessage(m: Message, showName = false): void {
+    const me = m.sender === bridge.agentId;
+    const paneW = (chatLog.width as number) || 50;
+    const innerW = Math.max(20, paneW - 4);
+    const maxContent = Math.max(12, Math.min(56, Math.floor(innerW * 0.62)));
+
+    const text = escapeTags(m.content?.text ?? '');
+    const wrapped = wrapText(text, maxContent);
+    const t = new Date(m.timestamp);
+    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${me ? ' ✓' : ''}${m.encrypted ? ' 🔒' : ''}`;
+
+    const contentW = Math.min(
+      maxContent,
+      Math.max(meta.length, ...wrapped.map((l) => l.length))
+    );
+    const bubbleW = contentW + 2; // 1 space padding each side
+    const bg = me ? TG.bubbleOut : TG.bubbleIn;
+    const pad0 = me ? ' '.repeat(Math.max(0, innerW - bubbleW)) : '';
+
+    if (showName && !me) {
+      const nm = nameFor(m.sender);
+      chatLog.add(`${pad0}{${avatarColor(nm)}-fg}{bold}${escapeTags(nm)}{/bold}{/}`);
+    }
+
+    const bubbleLine = (s: string): string =>
+      `${pad0}{${bg}-bg}{white-fg} ${s.padEnd(contentW)} {/}`;
+
+    for (const l of wrapped.length ? wrapped : ['']) chatLog.add(bubbleLine(l));
+    chatLog.add(`${pad0}{${bg}-bg}{${TG.muted}-fg} ${meta.padStart(contentW)} {/}`);
+    chatLog.add(''); // breathing room between bubbles
+  }
+
+  function dayDivider(): void {
+    const w = ((chatLog.width as number) || 50) - 4;
+    const label = ' today ';
+    const side = Math.max(0, Math.floor((w - label.length) / 2));
+    chatLog.add(`{${TG.muted}-fg}${'─'.repeat(side)}${label}${'─'.repeat(side)}{/}`);
+  }
+
+  // ===================================================== view switching
+  function showEmptyState(): void {
+    view = 'empty';
     openPeer = null;
-    pendingPeer = null;
-    chatLog.hide();
+    chatLog.setContent('');
+    chatHeader.setContent(`{${TG.muted}-fg}  no chat selected{/}`);
     input.hide();
-    help.hide();
-    quarantineLog.hide();
-    pwPrompt.hide();
-    contacts.show();
-    setHeader('Contacts');
-    setFooter('{bold}↑/↓{/bold} move · {bold}Enter{/bold} open · {bold}?{/bold} commands · {bold}q{/bold} quit');
-    contacts.focus();
-    refreshContacts();
+    const w = (chatLog.width as number) || 50;
+    const art = honeycombSmall();
+    const top = Math.max(1, Math.floor(((chatLog.height as number) || 12) / 2) - 4);
+    for (let i = 0; i < top; i++) chatLog.add('');
+    const center = (s: string): string => ' '.repeat(Math.max(0, Math.floor((w - s.length) / 2))) + s;
+    for (const l of art) chatLog.add(`{${TG.blueDeep}-fg}${center(l)}{/}`);
+    chatLog.add('');
+    chatLog.add(`{${TG.blueLight}-fg}{bold}${center('Welcome to the hive')}{/bold}{/}`);
+    chatLog.add(`{${TG.muted}-fg}${center('Pick a chat on the left to start messaging')}{/}`);
+    chatLog.scrollTo(0);
+    screen.render();
   }
 
   // Ask for the peer's password (session-only), then open the chat.
   function openAgent(peer: string): void {
-    view = 'password';
     pendingPeer = peer;
+    const nm = nameFor(peer);
     pwLabel.setContent(
-      `Password for {cyan-fg}${escapeTags(nameFor(peer))}{/cyan-fg}\n` +
-        '{gray-fg}Enter to confirm · blank = unauthenticated · Esc to cancel{/gray-fg}'
+      `Their password for {${avatarColor(nm)}-fg}{bold}${escapeTags(nm)}{/bold}{/}\n` +
+        `{${TG.muted}-fg}Enter to confirm · blank = unauthenticated · Esc to cancel{/}`
     );
     pwInput.clearValue();
     pwPrompt.show();
+    pwPrompt.setFront();
     pwInput.focus();
     screen.render();
   }
 
   async function showQuarantine(): Promise<void> {
     view = 'quarantine';
+    openPeer = null;
     unread.set(QUARANTINE, 0);
-    contacts.hide();
-    quarantineLog.show();
-    quarantineLog.setContent('');
+    input.hide();
+    chatLog.setContent('');
+    chatHeader.setContent(`{#E17076-fg}{bold} (!) Quarantine{/bold}{/}  {${TG.muted}-fg}untrusted · read-only{/}`);
     const items = await bridge.getQuarantine();
     if (items.length === 0) {
-      quarantineLog.add('{gray-fg}No quarantined messages.{/gray-fg}');
+      chatLog.add(`{${TG.muted}-fg}  No quarantined messages.{/}`);
     } else {
-      quarantineLog.add('{red-fg}{bold}UNTRUSTED — these messages were NOT executed.{/bold}{/red-fg}');
-      quarantineLog.add('');
+      chatLog.add(`{red-fg}{bold}  ⚠ These messages were NOT executed.{/bold}{/}`);
+      chatLog.add('');
       for (const q of items) {
         const t = new Date(q.timestamp);
         const time = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
-        quarantineLog.add(
-          `{gray-fg}${time}{/gray-fg} {cyan-fg}${escapeTags(q.sender)}{/cyan-fg} {red-fg}[${escapeTags(q.reason)}]{/red-fg}`
+        chatLog.add(
+          `  {${TG.muted}-fg}${time}{/} {#E17076-fg}${escapeTags(q.sender)}{/} {red-fg}[${escapeTags(q.reason)}]{/}`
         );
-        quarantineLog.add(`  ${escapeTags(textOf(q.content))}`);
+        chatLog.add(`    {white-fg}${escapeTags(textOf(q.content))}{/}`);
+        chatLog.add('');
       }
     }
-    setHeader('Quarantine (read-only)');
     setFooter(`{bold}Esc{/bold} back · files: ${bridge.getQuarantineDir()}`);
-    quarantineLog.focus();
+    chatLog.scrollTo(0);
     screen.render();
   }
 
@@ -276,57 +410,85 @@ export async function startTui(
     view = 'chat';
     openPeer = peer;
     unread.set(peer, 0);
-    contacts.hide();
-    help.hide();
-    quarantineLog.hide();
-    pwPrompt.hide();
-    chatLog.show();
-    input.show();
     chatLog.setContent('');
+    input.show();
 
-    const history = peer === BROADCAST ? await bridge.getBroadcasts() : await bridge.getConversation(peer);
-    history.forEach(renderMessage);
-
-    let note: string;
+    const nm = nameFor(peer);
+    let status: string;
     if (peer === BROADCAST) {
-      note = '{yellow-fg}broadcast — signed, not encrypted{/yellow-fg}';
+      status = `{${TG.blueLight}-fg}everyone on the topic · signed, not encrypted{/}`;
     } else {
       const known = bridge.getKnownAgents().some((a) => a.id === peer && a.encPublicKey);
-      const enc = known
-        ? '{green-fg}🔒 encrypted{/green-fg}'
-        : '{red-fg}peer key unknown — plaintext{/red-fg}';
+      const enc = known ? `{${TG.online}-fg}🔒 encrypted{/}` : `{red-fg}plaintext (key unknown){/}`;
       const auth = bridge.hasAgentPassword(peer)
-        ? '{green-fg}🔑 authenticated{/green-fg}'
-        : '{yellow-fg}⚠ no password — will be quarantined for them{/yellow-fg}';
-      note = `${enc} · ${auth}`;
+        ? `{${TG.online}-fg}🔑 authenticated{/}`
+        : `{#E8B339-fg}⚠ no password{/}`;
+      status = `${enc} · ${auth}`;
     }
-    setHeader(`Chat · ${escapeTags(nameFor(peer))} · ${note}`);
-    setFooter('{bold}Enter{/bold} send · {bold}Esc{/bold} back · {bold}Ctrl-C{/bold} quit');
+    const av = peer === BROADCAST ? '#' : initials(nm);
+    const avColor = peer === BROADCAST ? TG.blueLight : avatarColor(nm);
+    chatHeader.setContent(
+      ` {${avColor}-fg}({bold}${av}{/bold}){/} {bold}${escapeTags(nm)}{/bold}   {${TG.muted}-fg}${status}{/}`
+    );
+
+    const history = peer === BROADCAST ? await bridge.getBroadcasts() : await bridge.getConversation(peer);
+    if (history.length) dayDivider();
+    history.forEach((m) => renderMessage(m, peer === BROADCAST));
+    if (history.length) lastMsg.set(peer, history[history.length - 1].content?.text ?? '');
+
+    setFooter(`{bold}Tab{/bold} type · {bold}Enter{/bold} send · {bold}Esc{/bold} chats · {bold}?{/bold} keys`);
+    refreshContacts();
     input.focus();
+    chatLog.setScrollPerc(100);
     screen.render();
   }
 
   function showHelp(): void {
-    view = 'help';
-    contacts.hide();
-    chatLog.hide();
-    input.hide();
-    quarantineLog.hide();
-    pwPrompt.hide();
     help.show();
-    setHeader('Commands');
-    setFooter('{bold}Esc{/bold} back to contacts · {bold}q{/bold} quit');
+    help.setFront();
     help.focus();
     screen.render();
   }
+  function hideHelp(): void {
+    help.hide();
+    chats.focus();
+    screen.render();
+  }
 
-  // --- events --------------------------------------------------------------
-  contacts.on('select', (_item, index) => {
+  // ===================================================== focus helpers
+  function focusList(): void {
+    pwPrompt.hide();
+    help.hide();
+    chats.focus();
+    setFooter(`{bold}↑↓{/bold} move · {bold}Enter{/bold} open · {bold}/{/bold} search · {bold}?{/bold} keys · {bold}q{/bold} quit`);
+    screen.render();
+  }
+
+  // ===================================================== events
+  chats.on('select', (_item, index) => {
     const peer = rowToPeer[index];
     if (!peer) return;
     if (peer === QUARANTINE) void showQuarantine();
     else if (peer === BROADCAST) void showChat(BROADCAST);
-    else openAgent(peer); // ask for password first
+    else openAgent(peer);
+  });
+
+  // Live search filtering.
+  search.on('keypress', () => {
+    setTimeout(() => {
+      filter = (search.getValue() || '').trim();
+      refreshContacts();
+    }, 0);
+  });
+  search.key('escape', () => {
+    search.clearValue();
+    filter = '';
+    refreshContacts();
+    focusList();
+  });
+  search.on('submit', () => {
+    chats.focus();
+    screen.render();
   });
 
   pwInput.on('submit', (value: string) => {
@@ -341,9 +503,8 @@ export async function startTui(
   pwInput.key('escape', () => {
     pwInput.clearValue();
     pwPrompt.hide();
-    showContacts();
+    focusList();
   });
-  quarantineLog.key('escape', () => showContacts());
 
   input.on('submit', async (value: string) => {
     const text = (value || '').trim();
@@ -358,23 +519,40 @@ export async function startTui(
           await bridge.sendTextMessage(openPeer, text);
           renderMessage(mkLocal(bridge.agentId, openPeer, text, encrypted));
         }
+        lastMsg.set(openPeer, text);
+        refreshContacts();
       } catch (err) {
-        chatLog.add(`{red-fg}failed to send: ${escapeTags((err as Error).message)}{/red-fg}`);
+        chatLog.add(`{red-fg}failed to send: ${escapeTags((err as Error).message)}{/}`);
       }
     }
     if (view === 'chat') {
       input.focus();
+      chatLog.setScrollPerc(100);
       screen.render();
     }
   });
 
-  input.key('escape', () => showContacts());
-  help.key('escape', () => showContacts());
-  contacts.key('?', () => showHelp());
+  input.key('escape', () => focusList());
 
-  // Live updates from the network.
+  // Sidebar / global keys.
+  chats.key('/', () => {
+    search.focus();
+    screen.render();
+  });
+  chats.key('?', () => showHelp());
+  chats.key(['q'], async () => quit());
+  chats.key('tab', () => {
+    if (view === 'chat') input.focus();
+    screen.render();
+  });
+  input.key('tab', () => focusList());
+  help.key(['escape', 'q', '?'], () => hideHelp());
+  chatLog.key('escape', () => focusList());
+
+  // ===================================================== live network feed
   bridge.on('agentDiscovered', (_a: AgentIdentity) => {
-    if (view === 'contacts') refreshContacts();
+    refreshContacts();
+    void refreshTopBar();
   });
 
   bridge.on('text', (m: Message) => {
@@ -382,31 +560,40 @@ export async function startTui(
       view === 'chat' &&
       ((openPeer !== BROADCAST && m.sender === openPeer && m.recipient === bridge.agentId) ||
         (openPeer === BROADCAST && m.recipient === BROADCAST));
+    const key = m.recipient === BROADCAST ? BROADCAST : m.sender;
+    lastMsg.set(key, m.content?.text ?? '');
     if (isForOpenChat) {
-      renderMessage(m);
+      renderMessage(m, openPeer === BROADCAST);
+      chatLog.setScrollPerc(100);
       screen.render();
     } else {
-      const key = m.recipient === BROADCAST ? BROADCAST : m.sender;
       unread.set(key, (unread.get(key) || 0) + 1);
-      if (view === 'contacts') refreshContacts();
     }
+    refreshContacts();
   });
 
-  // Untrusted messages never enter a chat — only the Quarantine view.
   bridge.on('quarantine', () => {
     unread.set(QUARANTINE, (unread.get(QUARANTINE) || 0) + 1);
-    if (view === 'contacts') refreshContacts();
-    else if (view === 'quarantine') void showQuarantine();
+    if (view === 'quarantine') void showQuarantine();
+    else refreshContacts();
   });
 
-  // Global quit.
-  screen.key(['q', 'C-c'], async () => {
+  // Global quit + periodic status refresh.
+  screen.key(['C-c'], async () => quit());
+  const statusTimer = setInterval(() => void refreshTopBar(), 5000);
+
+  async function quit(): Promise<void> {
+    clearInterval(statusTimer);
     screen.destroy();
     await bridge.stop().catch(() => undefined);
     process.exit(0);
-  });
+  }
 
-  showContacts();
+  // ===================================================== boot
+  void refreshTopBar();
+  refreshContacts();
+  showEmptyState();
+  focusList();
   screen.render();
 
   // Resolve only when the process exits.
@@ -440,34 +627,26 @@ function textOf(content: any): string {
 
 function helpText(): string {
   return [
-    '{bold}HiveSync — commands & keys{/bold}',
+    '{bold}HiveSync — a terminal hivemind{/bold}',
     '',
-    '{cyan-fg}Navigation{/cyan-fg}',
-    '  ↑ / ↓ / j / k    move in the contacts list',
-    '  Enter            open the selected chat',
-    '  Esc              back to the contacts list',
-    '  ?                show this commands screen',
-    '  q  /  Ctrl-C     quit',
+    `{${TG.blueLight}-fg}Navigation{/}`,
+    '  ↑ ↓ / j k      move through chats',
+    '  Enter          open the selected chat',
+    '  /              search contacts',
+    '  Tab            jump between list ⇄ message box',
+    '  Esc            back to the chat list',
+    '  ?              this screen   ·   q / Ctrl-C  quit',
     '',
-    '{cyan-fg}In a chat{/cyan-fg}',
-    '  type + Enter     send a message',
-    '  mouse / wheel    scroll history',
-    '  🔒               message was end-to-end encrypted',
-    '  ✉️                message was sent in plaintext (broadcast or unknown key)',
+    `{${TG.blueLight}-fg}Messaging{/}`,
+    '  type + Enter   send   ·   🔒 end-to-end encrypted',
+    '  wheel / drag   scroll history',
     '',
-    '{cyan-fg}Access control{/cyan-fg}',
-    '  Opening an agent asks for {bold}their password{/bold} (kept for this session',
-    '  only, never saved). With the right password your messages are trusted',
-    '  and trigger execution + an automated reply on their side.',
-    '  Messages to you {bold}without{/bold} a valid password are NOT executed — they',
-    '  go to {red-fg}🚫 Quarantine{/red-fg} (inert files) for safe review.',
+    `{${TG.blueLight}-fg}Access control{/}`,
+    '  Opening an agent asks for {bold}their password{/bold} (session-only).',
+    '  Right password → your messages are trusted & executed.',
+    '  Wrong/none → routed to {#E17076-fg}(!) Quarantine{/} on their side.',
     '',
-    '{cyan-fg}Contacts{/cyan-fg}',
-    '  Agents are auto-discovered over Waku and appear automatically.',
-    '  “📢 Broadcast” is a room everyone on the topic can read.',
-    '  A red (n) marks unread messages.',
-    '',
-    '{gray-fg}Press Esc to go back.{/gray-fg}',
+    `{${TG.muted}-fg}Press Esc to close.{/}`,
   ].join('\n');
 }
 
