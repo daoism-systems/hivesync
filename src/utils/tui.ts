@@ -31,31 +31,10 @@ export async function startTui(
     fullUnicode: true,
     title: 'HiveSync',
     autoPadding: true,
-    dockBorders: true,
     ...screenOptions,
   });
 
-  // Debounced render: collapses multiple rapid state updates into one repaint,
-  // preventing partial-frame artifacts from async event bursts.
-  let renderPending = false;
-  function schedRender(): void {
-    if (renderPending) return;
-    renderPending = true;
-    setImmediate(() => {
-      renderPending = false;
-      screen.render();
-    });
-  }
-
-  // Re-render after resize so layout recalculates cleanly.
-  let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-  screen.on('resize', () => {
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      resizeTimer = null;
-      screen.render();
-    }, 150);
-  });
+  screen.program.alternateBuffer();
 
   const unread = new Map<string, number>();
   const lastMsg = new Map<string, string>(); // peer → last message preview
@@ -273,9 +252,7 @@ export async function startTui(
     }
 
     chats.setItems(items);
-    // Use the debounced helper so rapid network-driven updates (agentDiscovered,
-    // text bursts) coalesce into a single repaint instead of flickering.
-    schedRender();
+    screen.render();
   }
 
   function setFooter(text: string): void {
@@ -389,12 +366,7 @@ export async function startTui(
   }
 
   // Ask for the peer's password (session-only), then open the chat.
-  // If a password was already provided this session, skip the prompt.
   function openAgent(peer: string): void {
-    if (bridge.hasAgentPassword(peer)) {
-      void showChat(peer);
-      return;
-    }
     pendingPeer = peer;
     const nm = nameFor(peer);
     pwLabel.setContent(
@@ -595,10 +567,11 @@ export async function startTui(
     if (isForOpenChat) {
       renderMessage(m, openPeer === BROADCAST);
       chatLog.setScrollPerc(100);
+      screen.render();
     } else {
       unread.set(key, (unread.get(key) || 0) + 1);
     }
-    refreshContacts(); // also schedules a debounced render via schedRender()
+    refreshContacts();
   });
 
   bridge.on('quarantine', () => {
@@ -613,22 +586,11 @@ export async function startTui(
 
   async function quit(): Promise<void> {
     clearInterval(statusTimer);
-    if (resizeTimer) clearTimeout(resizeTimer);
-    // Explicitly restore the terminal before destroying the blessed screen so
-    // the alt-screen buffer is exited and the cursor is visible again even if
-    // blessed's own cleanup is skipped (e.g. uncaught exception).
-    try {
-      screen.program.normalBuffer();
-      screen.program.showCursor();
-    } catch { /* already torn down */ }
+    screen.program.normalBuffer();
     screen.destroy();
     await bridge.stop().catch(() => undefined);
     process.exit(0);
   }
-
-  // Ensure the terminal is restored on SIGTERM / SIGHUP, not just Ctrl-C.
-  process.once('SIGTERM', () => { void quit(); });
-  process.once('SIGHUP', () => { void quit(); });
 
   // ===================================================== boot
   void refreshTopBar();
