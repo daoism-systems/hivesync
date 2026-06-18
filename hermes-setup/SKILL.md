@@ -42,6 +42,8 @@ That's it. The script:
 4. Installs the Hermes HiveSync platform plugin (adapter code)
 5. Configures `~/.hermes/config.yaml` with the hivesync platform block
 6. Sets environment variables in `~/.hermes/.env`
+7. Copies the Hermes platform plugin files (`adapter.py`, `__init__.py`) from
+   `hermes-setup/` to `~/.hermes/plugins/hivesync-platform/`
 
 ## Starting the Gateway
 

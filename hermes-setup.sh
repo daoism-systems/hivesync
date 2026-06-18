@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# HiveSync Hermes Setup — One Command Setup for Hermes + HiveSync
+# HiveSync Hermes Setup — one-command integration with Hermes Agent
 #
 # Usage:
 #   bash hermes-setup.sh [agent-name]
 #
-# Examples:
-#   bash hermes-setup.sh everhomie          # non-interactive, use "everhomie"
-#   bash hermes-setup.sh                    # interactive, prompts for agent name
-#
-# What it does:
-#   1. Installs deps and builds HiveSync
-#   2. Creates agent identity + scrypt-hashed password
-#   3. Writes hivesync.yaml config
-#   4. Installs the Hermes HiveSync platform plugin
-#   5. Configures Hermes gateway (config.yaml + .env)
-#   6. Prints ready-to-go instructions
+# Idempotent: safe to re-run; reuses existing password and skips unchanged steps.
 # =============================================================================
 
 set -euo pipefail
@@ -25,97 +15,119 @@ HERMES_HOME="${HOME}/.hermes"
 PLUGIN_DIR="${HERMES_HOME}/plugins/hivesync-platform"
 CONFIG_YAML="${HERMES_HOME}/config.yaml"
 ENV_FILE="${HERMES_HOME}/.env"
-PASSWORD=""
 
-# ── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info()  { echo -e "${CYAN}  →${NC} $1"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}  ⚠${NC} $1"; }
-fail()  { echo -e "${RED}  ✗${NC} $1"; exit 1; }
+fail()  { echo -e "${RED}  ✗${NC} $1" >&2; exit 1; }
 header(){ echo -e "\n${BOLD}${CYAN}══ $1 ══${NC}\n"; }
 
-# ── Prerequisites ───────────────────────────────────────────────────────────
+# ── 1. Prerequisites ─────────────────────────────────────────────────────────
 header "Checking prerequisites"
 
-if [[ "$(uname -s)" != "Linux" ]]; then
-  fail "This script only supports Linux (detected: $(uname -s))"
+MISSING=0
+
+command -v node &>/dev/null || { fail "Node.js is not installed (node 18+ required)"; MISSING=1; }
+NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  echo -e "${RED}  ✗${NC} Node.js 18+ required (found v${NODE_MAJOR}.x)" >&2
+  MISSING=1
+else
+  ok "Node.js $(node --version)"
 fi
 
-if ! command -v node &>/dev/null; then
-  fail "Node.js is not installed. Install it first (node 18+ required)."
-fi
-ok "Node.js $(node --version)"
+command -v npm &>/dev/null   || { echo -e "${RED}  ✗${NC} npm not found" >&2; MISSING=1; }
+[[ "$MISSING" -eq 0 ]] && ok "npm $(npm --version)"
 
-if ! command -v npm &>/dev/null; then
-  fail "npm is not installed."
-fi
-ok "npm $(npm --version)"
+command -v git &>/dev/null   || { echo -e "${RED}  ✗${NC} git not found" >&2; MISSING=1; }
+[[ "$MISSING" -eq 0 ]] && ok "git $(git --version | awk '{print $3}')"
 
 if command -v hermes &>/dev/null; then
-  ok "Hermes agent found: $(hermes --version 2>/dev/null || echo 'present')"
+  ok "hermes $(hermes --version 2>/dev/null || echo 'present')"
 else
-  warn "Hermes agent not found in PATH. Will configure files but you may need to install Hermes."
+  warn "hermes not found — files will be configured but install hermes first:"
   warn "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
 fi
 
-# ── Agent Identity ──────────────────────────────────────────────────────────
+[[ "$MISSING" -ne 0 ]] && fail "Fix missing prerequisites above and re-run."
+
+# ── 2. Agent name ─────────────────────────────────────────────────────────────
 header "Agent identity"
 
-AGENT_NAME="${1:-}"
-if [[ -z "$AGENT_NAME" ]]; then
-  read -r -p "  Enter agent name (e.g., everhomie): " AGENT_NAME
-  AGENT_NAME="${AGENT_NAME:-agent-$(date +%s | md5sum | head -c 8)}"
-fi
-
+AGENT_NAME="${1:-myagent}"
 AGENT_ID="${AGENT_NAME}"
 info "Agent ID: ${AGENT_ID}"
 
-# Generate password if not already set
-if [[ -z "$PASSWORD" ]]; then
-  PASSWORD="$(openssl rand -base64 24 2>/dev/null || node -e "console.log(require('crypto').randomBytes(24).toString('base64'))")"
-fi
-info "Password generated: ${PASSWORD:0:12}..."
-
-# ── Compute scrypt hash ─────────────────────────────────────────────────────
-header "Computing scrypt password hash"
-
-SCRYPT_OUTPUT=$(node -e "
-const crypto = require('crypto');
-const password = '${PASSWORD}';
-const salt = crypto.randomBytes(32);
-const key = crypto.scryptSync(password, salt, 32, { N: 1024, r: 8, p: 1 });
-const hash = key.toString('base64');
-const saltB64 = salt.toString('base64');
-console.log(JSON.stringify({hash, salt: saltB64}));
-")
-SCRYPT_HASH=$(echo "$SCRYPT_OUTPUT" | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).hash))")
-SCRYPT_SALT=$(echo "$SCRYPT_OUTPUT" | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).salt))")
-ok "Scrypt hash computed"
-
-# ── Install deps & build ────────────────────────────────────────────────────
-header "Installing dependencies & building"
+# ── 3. npm install && npm run build ──────────────────────────────────────────
+header "Building HiveSync"
 
 cd "$REPO_DIR"
 info "npm install..."
-npm install --silent 2>&1 | tail -1 || true
+npm install --silent
 ok "npm install complete"
 
 info "npm run build..."
-npm run build 2>&1 | tail -1 || true
-ok "Build complete"
+npm run build
+ok "Build complete — dist/cli.js ready"
 
-# ── Create config/hivesync.yaml ─────────────────────────────────────────────
-header "Creating HiveSync config"
+# ── 4. Generate password + scrypt hash ───────────────────────────────────────
+header "Generating credentials"
 
-mkdir -p "${REPO_DIR}/config" "${REPO_DIR}/data"
+mkdir -p "$HERMES_HOME"
+touch "$ENV_FILE"
 
-cat > "${REPO_DIR}/config/hivesync.yaml" << HIVESYNCCONFIG
+# Idempotent: reuse existing password from ~/.hermes/.env
+if grep -q "^export HIVESYNC_PASSWORD=" "$ENV_FILE" 2>/dev/null; then
+  PASSWORD=$(grep "^export HIVESYNC_PASSWORD=" "$ENV_FILE" | head -1 | sed 's/^export HIVESYNC_PASSWORD=//')
+  info "Reusing existing password from ~/.hermes/.env"
+else
+  # 32 alphanumeric chars via node crypto (no +/= from base64)
+  PASSWORD=$(node -e "
+    const c = require('crypto');
+    let s = '';
+    while (s.length < 32) s += c.randomBytes(32).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
+    process.stdout.write(s.slice(0, 32));
+  ")
+  info "Generated new 32-char password"
+fi
+
+# Compute scrypt hash only when we need to write a new config
+EXISTING_AGENT=""
+CONFIG_FILE="${REPO_DIR}/config/hivesync.yaml"
+[[ -f "$CONFIG_FILE" ]] && EXISTING_AGENT=$(awk '/^agentId:/{print $2}' "$CONFIG_FILE" | tr -d '"' | tr -d "'")
+
+NEED_CONFIG=0
+[[ ! -f "$CONFIG_FILE" ]] && NEED_CONFIG=1
+[[ "$EXISTING_AGENT" != "$AGENT_ID" ]] && NEED_CONFIG=1
+
+if [[ "$NEED_CONFIG" -eq 1 ]]; then
+  # salt:hash stored together so we can verify without the plaintext password
+  SCRYPT_COMBINED=$(node -e "
+    const crypto = require('crypto');
+    const password = process.argv[1];
+    const salt = crypto.randomBytes(32);
+    const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+    process.stdout.write(salt.toString('base64') + ':' + hash.toString('base64'));
+  " "$PASSWORD")
+  ok "scrypt hash computed (N=16384)"
+else
+  info "config/hivesync.yaml up-to-date for agent '${AGENT_ID}' — skipping regeneration"
+fi
+
+# ── 5. Write config/hivesync.yaml ────────────────────────────────────────────
+header "Writing HiveSync config"
+
+mkdir -p "${REPO_DIR}/config" "${REPO_DIR}/data" "${REPO_DIR}/data/obsidian-knowledge"
+
+if [[ "$NEED_CONFIG" -eq 1 ]]; then
+  cat > "$CONFIG_FILE" << YAML
 agentId: ${AGENT_ID}
 agentName: "${AGENT_NAME}"
 storagePath: ${REPO_DIR}/data/hivesync.db
 syncInterval: 30
+
 waku:
   listenAddresses:
     - /ip4/0.0.0.0/tcp/0/ws
@@ -125,481 +137,173 @@ waku:
   contentTopic: /hivesync/1/agents/proto
   keepAlive: true
   maxPeers: 10
+
 auth:
-  salt: "${SCRYPT_SALT}"
+  salt: "${SCRYPT_COMBINED}"
   autoReply: "✓ received"
+
 obsidian:
   enabled: true
   vaultPath: ${REPO_DIR}/data/obsidian-knowledge
-HIVESYNCCONFIG
+YAML
+  ok "Wrote config/hivesync.yaml"
+else
+  ok "config/hivesync.yaml unchanged"
+fi
 
-ok "Config written to config/hivesync.yaml"
-info "  Agent ID: ${AGENT_ID}"
-info "  DB path:  ${REPO_DIR}/data/hivesync.db"
-
-# ── Install Hermes Plugin ───────────────────────────────────────────────────
-header "Installing Hermes HiveSync plugin"
+# ── 6. Install Hermes plugin ──────────────────────────────────────────────────
+header "Installing Hermes plugin"
 
 mkdir -p "$PLUGIN_DIR"
+
+# Copy adapter.py from repo's hermes-setup/ directory
+if [[ -f "${REPO_DIR}/hermes-setup/adapter.py" ]]; then
+  cp "${REPO_DIR}/hermes-setup/adapter.py" "${PLUGIN_DIR}/adapter.py"
+  ok "Copied adapter.py from hermes-setup/"
+else
+  warn "hermes-setup/adapter.py not found — skipping adapter copy"
+fi
 
 # __init__.py
 cat > "${PLUGIN_DIR}/__init__.py" << 'PYEOF'
 from .adapter import register
+
 __all__ = ["register"]
 PYEOF
 
-# adapter.py
-cat > "${PLUGIN_DIR}/adapter.py" << 'PYEOF'
-"""
-HiveSync Platform Adapter for Hermes Agent.
-
-Plugin-based gateway adapter that polls a local HiveSync daemon's SQLite
-database and relays messages to/from the Hermes agent over the Waku P2P
-network.
-
-Configuration in config.yaml::
-
-    gateway:
-      platforms:
-        hivesync:
-          enabled: true
-          extra:
-            home: /path/to/hivesync
-            agent_id: everhomie
-            db_path: /path/to/hivesync/data/hivesync.db
-            password: "your-password"
-            poll_interval: 15
-            allowed_users: []
-            allow_all: false
-
-Environment variables (override config.yaml):
-    HIVESYNC_HOME, HIVESYNC_AGENT_ID, HIVESYNC_DB_PATH, HIVESYNC_PASSWORD,
-    HIVESYNC_POLL_INTERVAL, HIVESYNC_ALLOWED_USERS, HIVESYNC_ALLOW_ALL_USERS
-"""
-
-import asyncio
-import json
-import logging
-import os
-import sqlite3
-import time
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
-
-logger = logging.getLogger(__name__)
-
-from gateway.platforms.base import (
-    BasePlatformAdapter,
-    SendResult,
-    MessageEvent,
-    MessageType,
-)
-from gateway.config import Platform
-
-
-def _read_db(db_path, last_id, our_agent):
-    """Query HiveSync SQLite DB for messages since last_id."""
-    if not os.path.exists(db_path):
-        return []
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        if last_id:
-            cur.execute(
-                "SELECT id, sender, content, timestamp "
-                "FROM messages WHERE id > ? AND sender != ? "
-                "ORDER BY timestamp ASC",
-                (last_id, our_agent),
-            )
-        else:
-            cur.execute(
-                "SELECT id, sender, content, timestamp "
-                "FROM messages WHERE sender != ? "
-                "ORDER BY timestamp DESC LIMIT 1",
-                (our_agent,),
-            )
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-        if not last_id and rows:
-            rows.reverse()
-        return rows
-    except Exception as e:
-        logger.debug("HiveSync DB poll error: %s", e)
-        return []
-
-
-async def _send_hivesync(cli_path, recipient, message):
-    """Send a message via the HiveSync CLI."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "node", cli_path, "send", recipient, message,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(Path(cli_path).parent.parent),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return {"success": False, "error": "CLI timeout (30s)"}
-
-        if proc.returncode == 0:
-            output = stdout.decode().strip()
-            for line in output.splitlines():
-                if "Message sent! ID:" in line:
-                    msg_id = line.split("ID:")[-1].strip()
-                    return {"success": True, "message_id": msg_id}
-            return {"success": True, "message_id": str(int(time.time() * 1000))}
-        else:
-            err = stderr.decode().strip() or stdout.decode().strip()
-            return {"success": False, "error": err}
-    except FileNotFoundError:
-        return {"success": False, "error": "node not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-def check_requirements():
-    home = os.getenv("HIVESYNC_HOME", "/root/hivesync")
-    cli = os.path.join(home, "dist", "cli.js")
-    if not os.path.exists(cli):
-        logger.warning("HiveSync: CLI not found at %s", cli)
-        return False
-    return True
-
-
-def validate_config(config):
-    try:
-        extra = getattr(config, "extra", {}) or {}
-        if isinstance(extra, dict):
-            home = os.getenv("HIVESYNC_HOME") or extra.get("home", "/root/hivesync")
-            agent_id = os.getenv("HIVESYNC_AGENT_ID") or extra.get("agent_id", "")
-            if not home or not agent_id:
-                return False
-            cli = os.path.join(home, "dist", "cli.js")
-            if not os.path.exists(cli):
-                return False
-            return True
-        return False
-    except Exception:
-        return False
-
-
-def is_connected(config):
-    extra = getattr(config, "extra", {}) or {}
-    if not isinstance(extra, dict):
-        extra = {}
-    home = os.getenv("HIVESYNC_HOME") or extra.get("home", "/root/hivesync")
-    db = os.getenv("HIVESYNC_DB_PATH") or extra.get("db_path",
-               os.path.join(home, "data", "hivesync.db"))
-    return os.path.exists(db)
-
-
-async def interactive_setup():
-    return {
-        "home": "/root/hivesync",
-        "agent_id": "everhomie",
-        "poll_interval": 30,
-        "allow_all": False,
-    }
-
-
-def _env_enablement():
-    home = os.getenv("HIVESYNC_HOME")
-    agent_id = os.getenv("HIVESYNC_AGENT_ID")
-    if not home or not agent_id:
-        return None
-    db_path = os.getenv("HIVESYNC_DB_PATH") or os.path.join(home, "data", "hivesync.db")
-    password = os.getenv("HIVESYNC_PASSWORD", "")
-    extra = {"home": home, "agent_id": agent_id, "db_path": db_path, "password": password}
-    poll = os.getenv("HIVESYNC_POLL_INTERVAL")
-    if poll:
-        try:
-            extra["poll_interval"] = int(poll)
-        except ValueError:
-            pass
-    allow_all = os.getenv("HIVESYNC_ALLOW_ALL_USERS", "").lower() in {"1", "true", "yes"}
-    extra["allow_all"] = allow_all
-    allowed = os.getenv("HIVESYNC_ALLOWED_USERS", "")
-    if allowed:
-        extra["allowed_users"] = [u.strip() for u in allowed.split(",") if u.strip()]
-    home_channel = os.getenv("HIVESYNC_HOME_CHANNEL")
-    if not home_channel and allowed:
-        home_channel = allowed.split(",")[0].strip()
-    if home_channel:
-        extra["home_channel"] = home_channel
-    return {"extra": extra, "home_channel": home_channel or None}
-
-
-class HiveSyncAdapter(BasePlatformAdapter):
-    """Polling adapter for HiveSync P2P messaging."""
-
-    MAX_MESSAGE_LENGTH = 4096
-
-    def __init__(self, config, **kwargs):
-        platform = Platform("hivesync")
-        super().__init__(config=config, platform=platform)
-        extra = getattr(config, "extra", {}) or {}
-        self.home = os.getenv("HIVESYNC_HOME") or extra.get("home", "/root/hivesync")
-        self.agent_id = os.getenv("HIVESYNC_AGENT_ID") or extra.get("agent_id", "everhomie")
-        self.db_path = os.getenv("HIVESYNC_DB_PATH") or extra.get("db_path",
-                        os.path.join(self.home, "data", "hivesync.db"))
-        self.password = os.getenv("HIVESYNC_PASSWORD") or extra.get("password", "")
-        try:
-            self.poll_interval = int(
-                os.getenv("HIVESYNC_POLL_INTERVAL") or extra.get("poll_interval", 30)
-            )
-        except (ValueError, TypeError):
-            self.poll_interval = 30
-        self.cli_path = os.path.join(self.home, "dist", "cli.js")
-        self.allow_all = (
-            os.getenv("HIVESYNC_ALLOW_ALL_USERS", "").lower() in {"1", "true", "yes"}
-            if os.getenv("HIVESYNC_ALLOW_ALL_USERS")
-            else extra.get("allow_all", False)
-        )
-        self.allowed_users = extra.get("allowed_users", [])
-        self._allowed_set = {u.lower() for u in self.allowed_users if isinstance(u, str)}
-        self._last_seen_id = ""
-        self._poll_task = None
-        self._last_poll_ts = 0.0
-        self._known_agents = {}
-
-    @property
-    def name(self):
-        return "hivesync"
-
-    def _is_authorized(self, sender):
-        if self.allow_all:
-            return True
-        if not self._allowed_set:
-            return True
-        return sender.lower() in self._allowed_set
-
-    def _extract_text(self, content):
-        if isinstance(content, dict):
-            return content.get("text", str(content))
-        if isinstance(content, str):
-            try:
-                return json.loads(content).get("text", content)
-            except (json.JSONDecodeError, TypeError):
-                return content
-        return str(content)
-
-    async def connect(self):
-        if not os.path.exists(self.db_path):
-            logger.warning("HiveSync: DB not found at %s", self.db_path)
-            return False
-        if not os.path.exists(self.cli_path):
-            logger.warning("HiveSync: CLI not found at %s", self.cli_path)
-            return False
-        logger.info("HiveSync: starting poll loop for agent '%s' (interval=%ss)",
-                     self.agent_id, self.poll_interval)
-        state_file = Path(self.home) / "data" / ".hermes-last-id"
-        if state_file.exists():
-            self._last_seen_id = state_file.read_text().strip()
-        self._poll_task = asyncio.create_task(self._poll_loop())
-        return True
-
-    async def disconnect(self):
-        if self._poll_task:
-            self._poll_task.cancel()
-            try:
-                await self._poll_task
-            except asyncio.CancelledError:
-                pass
-            self._poll_task = None
-        logger.info("HiveSync: disconnected")
-
-    async def _poll_loop(self):
-        while True:
-            try:
-                await self._poll_once()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.debug("HiveSync poll error: %s", e)
-            await asyncio.sleep(self.poll_interval)
-
-    async def _poll_once(self):
-        rows = _read_db(self.db_path, self._last_seen_id, self.agent_id)
-        if not rows:
-            return
-        last_id = ""
-        for row in rows:
-            msg_id = row["id"]
-            sender = row["sender"]
-            content = row["content"]
-            timestamp = row["timestamp"]
-            if sender == self.agent_id:
-                continue
-            if not self._is_authorized(sender):
-                logger.info("HiveSync: unauthorized sender '%s' blocked", sender)
-                continue
-            self._known_agents[sender] = sender
-            text = self._extract_text(content)
-            source = self.build_source(
-                chat_id=sender, chat_name=sender, chat_type="dm",
-                user_id=sender, user_name=sender, message_id=msg_id,
-            )
-            event = MessageEvent(
-                text=text, message_type=MessageType.TEXT, source=source,
-                message_id=msg_id,
-                timestamp=datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                    if timestamp else datetime.now(),
-            )
-            await self.handle_message(event)
-            last_id = msg_id
-        if last_id and last_id > self._last_seen_id:
-            self._last_seen_id = last_id
-            try:
-                state_file = Path(self.home) / "data" / ".hermes-last-id"
-                state_file.parent.mkdir(parents=True, exist_ok=True)
-                state_file.write_text(last_id)
-            except Exception:
-                pass
-
-    async def send(self, chat_id, content, reply_to=None, metadata=None):
-        result = await _send_hivesync(self.cli_path, chat_id, content)
-        if result.get("success"):
-            return SendResult(success=True, message_id=result.get("message_id"))
-        return SendResult(success=False, error=result.get("error", "Unknown error"))
-
-    async def send_typing(self, chat_id, metadata=None):
-        pass
-
-    async def send_image(self, chat_id, image_url, caption=None, metadata=None):
-        msg = f"[📸]({image_url})"
-        if caption:
-            msg += f" {caption}"
-        return await self.send(chat_id, msg, metadata=metadata)
-
-    async def get_chat_info(self, chat_id):
-        return {"name": self._known_agents.get(chat_id, chat_id), "type": "dm", "chat_id": chat_id}
-
-    def format_message(self, content):
-        return content
-
-
-def register(ctx):
-    ctx.register_platform(
-        name="hivesync",
-        label="HiveSync",
-        adapter_factory=lambda cfg: HiveSyncAdapter(cfg),
-        check_fn=check_requirements,
-        validate_config=validate_config,
-        is_connected=is_connected,
-        required_env=["HIVESYNC_HOME", "HIVESYNC_AGENT_ID"],
-        install_hint="Requires Node.js and a running HiveSync daemon",
-        setup_fn=interactive_setup,
-        env_enablement_fn=_env_enablement,
-        cron_deliver_env_var="HIVESYNC_HOME_CHANNEL",
-        allowed_users_env="HIVESYNC_ALLOWED_USERS",
-        allow_all_env="HIVESYNC_ALLOW_ALL_USERS",
-        max_message_length=4096,
-        emoji="🐝",
-        pii_safe=True,
-        allow_update_command=True,
-        platform_hint=(
-            "You are chatting over HiveSync, a P2P messaging protocol built on "
-            "the Waku network. Messages are end-to-end encrypted and delivered "
-            "through a local daemon. You can use markdown formatting in your "
-            "responses. Each chat is a DM with a specific agent identified by "
-            "their agent ID. Messages may be delayed by up to 30 seconds "
-            "depending on the polling interval."
-        ),
-    )
-PYEOF
+# plugin.yaml
+cat > "${PLUGIN_DIR}/plugin.yaml" << YAML
+name: hivesync
+label: HiveSync
+description: "P2P messaging gateway platform built on the Waku protocol"
+version: 1.0.0
+author: HiveSync
+license: MIT
+emoji: "🐝"
+adapter_module: adapter
+register_function: register
+required_env:
+  - HIVESYNC_HOME
+  - HIVESYNC_AGENT_ID
+install_hint: "Requires Node.js 18+ and a running HiveSync daemon (npm run build)"
+YAML
 
 ok "Plugin installed at ${PLUGIN_DIR}/"
 
-# ── Configure Hermes Gateway ────────────────────────────────────────────────
+# ── 7. Update ~/.hermes/config.yaml ──────────────────────────────────────────
 header "Configuring Hermes gateway"
 
-mkdir -p "$(dirname "$CONFIG_YAML")"
-
-# Add hivesync platform block to config.yaml
-if grep -q "hivesync:" "$CONFIG_YAML" 2>/dev/null; then
-  warn "HiveSync platform config already exists in config.yaml — updating password and agent_id"
-  # Update the existing block with new values
-  python3 -c "
-import yaml, sys
-with open('$CONFIG_YAML') as f:
-    data = yaml.safe_load(f)
-gw = data.get('gateway', data)
-platforms = gw.get('platforms', {})
-if 'hivesync' not in platforms:
-    platforms['hivesync'] = {'enabled': True, 'extra': {}}
-hs = platforms['hivesync']
-hs['enabled'] = True
-extra = hs.setdefault('extra', {})
-extra['home'] = '$REPO_DIR'
-extra['agent_id'] = '$AGENT_ID'
-extra['db_path'] = '${REPO_DIR}/data/hivesync.db'
-extra['poll_interval'] = 15
-extra['allow_all'] = True
-extra['password'] = '$PASSWORD'
-with open('$CONFIG_YAML', 'w') as f:
-    yaml.dump(data, f, default_flow_style=False)
-print('✓')
-" 2>/dev/null && ok "Config.yaml updated" || warn "Could not auto-edit config.yaml — see manual steps below"
-else
-  touch "$CONFIG_YAML"
-  cat >> "$CONFIG_YAML" << YAMLCONFIG
-
-# HiveSync P2P messaging platform
+if [[ ! -f "$CONFIG_YAML" ]]; then
+  cat > "$CONFIG_YAML" << YAML
 gateway:
-  platforms:
+  platforms: {}
+YAML
+  info "Created ${CONFIG_YAML}"
+fi
+
+if grep -q "^    hivesync:" "$CONFIG_YAML" 2>/dev/null || grep -q "^  hivesync:" "$CONFIG_YAML" 2>/dev/null; then
+  # Update existing block via Python
+  python3 - << PYEOF
+import re, sys
+
+path = "${CONFIG_YAML}"
+home = "${REPO_DIR}"
+agent_id = "${AGENT_ID}"
+db_path = "${REPO_DIR}/data/hivesync.db"
+
+with open(path) as f:
+    text = f.read()
+
+block = """\
     hivesync:
       enabled: true
       extra:
-        home: ${REPO_DIR}
-        agent_id: ${AGENT_ID}
-        db_path: ${REPO_DIR}/data/hivesync.db
+        home: {home}
+        agent_id: {agent_id}
+        db_path: {db_path}
         poll_interval: 15
         allow_all: true
-YAMLCONFIG
-  ok "Gateway config block added to ~/.hermes/config.yaml"
+""".format(home=home, agent_id=agent_id, db_path=db_path)
+
+# Replace existing hivesync block (everything from the hivesync: key until the
+# next same-level key or end of the platforms section)
+pattern = r'( {2,4})hivesync:.*?(?=\n\1\w|\n\ngateway|\Z)'
+if re.search(pattern, text, re.DOTALL):
+    text = re.sub(pattern, block.rstrip(), text, flags=re.DOTALL)
+    with open(path, 'w') as f:
+        f.write(text)
+    print("updated")
+else:
+    print("no-match")
+PYEOF
+  ok "Updated hivesync block in ${CONFIG_YAML}"
+else
+  # Append new block under gateway.platforms
+  python3 - << PYEOF
+path = "${CONFIG_YAML}"
+home = "${REPO_DIR}"
+agent_id = "${AGENT_ID}"
+db_path = "${REPO_DIR}/data/hivesync.db"
+
+with open(path) as f:
+    text = f.read()
+
+block = """\
+    hivesync:
+      enabled: true
+      extra:
+        home: {home}
+        agent_id: {agent_id}
+        db_path: {db_path}
+        poll_interval: 15
+        allow_all: true
+""".format(home=home, agent_id=agent_id, db_path=db_path)
+
+if "platforms:" in text:
+    # Insert after 'platforms:' line
+    text = text.replace("platforms:", "platforms:\n" + block, 1)
+elif "gateway:" in text:
+    text = text.replace("gateway:", "gateway:\n  platforms:\n" + block, 1)
+else:
+    text += "\ngateway:\n  platforms:\n" + block
+
+with open(path, 'w') as f:
+    f.write(text)
+PYEOF
+  ok "Added hivesync platform to ${CONFIG_YAML}"
 fi
 
-# Set env vars
-touch "$ENV_FILE"
-for kv in \
-  "HIVESYNC_HOME=${REPO_DIR}" \
-  "HIVESYNC_AGENT_ID=${AGENT_ID}" \
-  "HIVESYNC_PASSWORD=${PASSWORD}" \
-  "HIVESYNC_POLL_INTERVAL=15" \
-  "HIVESYNC_ALLOW_ALL_USERS=true"; do
+# ── 8. Set env vars in ~/.hermes/.env ────────────────────────────────────────
+header "Writing environment variables"
 
-  key="${kv%%=*}"
-  # Remove old entry, add new one at end
-  grep -v "^export ${key}=" "$ENV_FILE" > "${ENV_FILE}.tmp" 2>/dev/null || true
-  echo "export ${kv}" >> "${ENV_FILE}.tmp"
+set_env_var() {
+  local key="$1" val="$2"
+  # Remove any existing line for this key, then append
+  { grep -v "^export ${key}=" "$ENV_FILE" 2>/dev/null || true; } > "${ENV_FILE}.tmp"
+  echo "export ${key}=${val}" >> "${ENV_FILE}.tmp"
   mv "${ENV_FILE}.tmp" "$ENV_FILE"
-done
-ok "Environment variables set in ~/.hermes/.env"
+}
 
-# ── Done! ───────────────────────────────────────────────────────────────────
-header "Setup complete! 🐝"
+set_env_var "HIVESYNC_HOME"          "${REPO_DIR}"
+set_env_var "HIVESYNC_AGENT_ID"      "${AGENT_ID}"
+set_env_var "HIVESYNC_PASSWORD"      "${PASSWORD}"
+set_env_var "HIVESYNC_POLL_INTERVAL" "15"
 
-echo -e "${BOLD}  Agent ID:${NC}  ${AGENT_ID}"
-echo -e "${BOLD}  Password:${NC}  ${PASSWORD}"
-echo -e "${BOLD}  Config:${NC}    ${REPO_DIR}/config/hivesync.yaml"
-echo -e "${BOLD}  Plugin:${NC}    ${PLUGIN_DIR}/"
-echo
-echo -e "  ${YELLOW}Next steps:${NC}"
-echo
-echo -e "  ${CYAN}1. Start the Hermes gateway:${NC}"
-echo -e "     hermes gateway run"
-echo
-echo -e "  ${CYAN}2. Or restart if already running:${NC}"
-echo -e "     hermes gateway restart"
-echo
-echo -e "  ${CYAN}3. Test by sending a message:${NC}"
-echo -e "     ${REPO_DIR}/dist/cli.js send <recipient-agent-id> \"Hello from \${AGENT_ID}!\""
-echo
-echo -e "  ${YELLOW}Save your password somewhere safe!${NC}"
-echo -e "  Other agents need it to authenticate with you."
-echo
+ok "Environment variables written to ~/.hermes/.env"
+
+# ── 9. Done ───────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}${GREEN}  HiveSync + Hermes setup complete!${NC}"
+echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  ${BOLD}Agent ID :${NC}  ${AGENT_ID}"
+echo -e "  ${BOLD}Password :${NC}  ${PASSWORD}"
+echo -e "  ${BOLD}Config   :${NC}  ${CONFIG_FILE}"
+echo -e "  ${BOLD}Plugin   :${NC}  ${PLUGIN_DIR}/"
+echo ""
+echo -e "  ${YELLOW}Share the password above with agents you want to allow to message you.${NC}"
+echo ""
+echo -e "  ${CYAN}Start the gateway:${NC}"
+echo -e "    hermes gateway run"
+echo ""
