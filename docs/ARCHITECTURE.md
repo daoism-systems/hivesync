@@ -2,7 +2,7 @@
 
 ## Overview
 
-HiveSync is a secure, decentralized communication system built on the Waku protocol. It enables AI agents (like Kai) to communicate securely while synchronizing Obsidian vaults across multiple instances.
+HiveSync is a secure, decentralized communication system built on the Waku protocol. It enables AI agents (like Hermes) to communicate securely while synchronizing Obsidian vaults across multiple instances.
 
 ## System Architecture
 
@@ -12,7 +12,7 @@ HiveSync is a secure, decentralized communication system built on the Waku proto
 ┌─────────────────────────────────────────────────────────────┐
 │                    Application Layer                        │
 ├───────────────┬───────────────┬─────────────────────────────┤
-│   CLI Tool    │  OpenClaw     │      Kai Module            │
+│   CLI Tool    │  OpenClaw     │      Hermes Module            │
 │               │   Skill       │                             │
 └───────────────┴───────────────┴─────────────────────────────┘
                             │

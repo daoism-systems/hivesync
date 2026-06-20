@@ -11,7 +11,7 @@ export class WakuBridgeSkill extends Skill {
       name: 'waku-bridge',
       version: '1.0.0',
       description: 'Secure Waku-based communication between agents',
-      author: 'Kai Assistant',
+      author: 'HiveSync Contributors',
       triggers: [
         'waku',
         'bridge',

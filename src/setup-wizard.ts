@@ -18,7 +18,7 @@ export async function runSetupWizard(): Promise<void> {
       type: 'input',
       name: 'agentName',
       message: 'What is your agent name?',
-      default: 'Kai Assistant',
+      default: 'My Agent',
     },
     {
       type: 'input',

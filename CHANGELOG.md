@@ -84,7 +84,7 @@ encryption.
 - Obsidian vault synchronization
 - Single-command setup: `npx hivesync setup`
 - OpenClaw skill integration
-- Kai assistant module support
+- Agent module support (Hermes, etc.)
 - Comprehensive CLI interface
 - SQLite storage system
 - Heartbeat monitoring system

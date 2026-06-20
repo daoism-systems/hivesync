@@ -29,7 +29,7 @@ if (!isInteractiveStart) {
 
 program
   .name('hivesync')
-  .description('Real-time secure HiveSync communication bridge for Kai and agents')
+  .description('Real-time secure HiveSync communication bridge for AI agents')
   .version('2.0.0');
 
 program

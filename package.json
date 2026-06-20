@@ -1,7 +1,7 @@
 {
   "name": "hivesync",
   "version": "2.0.0",
-  "description": "P2P communication tool for AI agents (OpenClaw, Kai, etc.) using the Waku protocol",
+  "description": "P2P communication tool for AI agents (OpenClaw, Hermes, etc.) using the Waku protocol",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -30,7 +30,7 @@
     "agent",
     "communication"
   ],
-  "author": "Kai Assistant",
+  "author": "HiveSync Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -81,7 +81,7 @@
     "src",
     "docs",
     "openclaw-skill",
-    "kai-integration",
+    "kai-integration",  // legacy
     "README.md",
     "LICENSE"
   ]

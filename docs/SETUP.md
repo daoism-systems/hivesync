@@ -16,7 +16,7 @@
 - **Obsidian**: For vault synchronization features
 - **Docker**: For containerized deployment
 - **OpenClaw**: For voice command integration
-- **Kai**: For AI assistant integration
+- **Hermes**: For AI assistant integration
 
 ## Installation Methods
 
@@ -86,7 +86,7 @@ When you run `hivesync setup`, you'll be guided through:
 
 ### Step 1: Agent Identity
 ```
-? What is your agent name? Kai Assistant
+? What is your agent name? My Agent
 ? Agent ID (leave blank to generate): [auto-generated]
 ```
 
@@ -124,8 +124,8 @@ HiveSync uses YAML configuration files. The main configuration file is typically
 
 ```yaml
 # config/hivesync.yaml
-agentId: "kai-001"
-agentName: "Kai Assistant"
+agentId: "my-agent-001"
+agentName: "My Agent"
 storagePath: "./data/hivesync.db"
 syncInterval: 5
 
@@ -158,8 +158,8 @@ logging:
 You can also configure HiveSync using environment variables:
 
 ```bash
-export AGENT_ID="kai-001"
-export AGENT_NAME="Kai Assistant"
+export AGENT_ID="my-agent-001"
+export AGENT_NAME="My Agent"
 export STORAGE_PATH="./data/hivesync.db"
 export SYNC_INTERVAL=5
 export OBSIDIAN_PATH="~/Documents/Obsidian"
@@ -301,7 +301,7 @@ skills:
   - name: hivesync
     enabled: true
     config:
-      agentId: "kai-001"
+      agentId: "my-agent-001"
       storagePath: "./data/hivesync.db"
 ```
 
@@ -317,29 +317,29 @@ openclaw start
 # "Sync my Obsidian notes"
 ```
 
-## Kai Integration
+## Hermes Integration
 
-### 1. Install Kai Module
+### 1. Install Hermes Module
 
 ```bash
-# Install as Kai dependency
-cd /path/to/kai
+# Install as Hermes dependency
+cd /path/to/hermes
 npm install hivesync
 ```
 
-### 2. Configure Kai
+### 2. Configure Hermes
 
-Add HiveSync module to Kai configuration:
+Add HiveSync module to Hermes configuration:
 
 ```javascript
-// kai.config.js
+// hermes.config.js
 module.exports = {
   modules: {
     hivesync: {
       enabled: true,
       config: {
-        agentId: 'kai-main',
-        agentName: 'Kai Main Instance',
+        agentId: 'hermes-main',
+        agentName: 'Hermes Main Instance',
         storagePath: './data/hivesync.db',
       },
     },
@@ -347,14 +347,14 @@ module.exports = {
 };
 ```
 
-### 3. Use in Kai
+### 3. Use in Hermes
 
 ```javascript
-// In your Kai skills
-const hivesync = kai.modules.hivesync;
+// In your Hermes skills
+const hivesync = hermes.modules.hivesync;
 
 // Send a message
-await hivesync.sendMessage('other-agent', 'Hello from Kai!');
+await hivesync.sendMessage('other-agent', 'Hello from My Agent!');
 
 // Check for messages
 const messages = await hivesync.getUnreadMessages();
@@ -505,7 +505,7 @@ hivesync status
 
 # Expected output:
 # ✅ HiveSync is running
-# Agent: Kai Assistant (kai-001)
+# Agent: My Agent (my-agent-001)
 # Waku: Connected (3 peers)
 # Obsidian: Enabled (42 notes)
 ```
@@ -514,14 +514,14 @@ hivesync status
 
 ```bash
 # Send test message to yourself
-hivesync send kai-001 "Test message"
+hivesync send my-agent-001 "Test message"
 
 # Check for messages
 hivesync messages
 
 # Expected output:
 # 📨 Unread messages (1):
-# 1. From: kai-001
+# 1. From: my-agent-001
 #    Content: Test message
 ```
 

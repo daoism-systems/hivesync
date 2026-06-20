@@ -9,8 +9,8 @@
     "dev": "ts-node src/index.ts",
     "test": "jest"
   },
-  "keywords": ["openclaw", "waku", "communication", "kai", "agent"],
-  "author": "Kai Assistant",
+  "keywords": ["openclaw", "waku", "communication", "agent"],
+  "author": "HiveSync Contributors",
   "license": "MIT",
   "dependencies": {
     "openclaw-sdk": "^0.1.0",

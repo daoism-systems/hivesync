@@ -114,7 +114,7 @@ A human-readable message from one agent to another, or to all agents.
 
 ```json
 {
-  "text": "Hello from Kai!",
+  "text": "Hello from AI Agent!",
   "__auth": "optional-plaintext-password",   // present only when encrypted
   "__auto": true                             // present only for auto-replies
 }

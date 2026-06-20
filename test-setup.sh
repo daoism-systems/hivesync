@@ -58,12 +58,12 @@ else
     echo "❌ OpenClaw skill package missing"
 fi
 
-# Test 6: Check Kai integration
-echo -e "\n6. Checking Kai integration..."
-if [ -f "kai-integration/README.md" ]; then
-    echo "✅ Kai integration documentation exists"
+# Test 6: Check Hermes integration
+echo -e "\n6. Checking Hermes integration..."
+if [ -f "kai-integration/  # legacy" ]; then
+    echo "✅ Hermes integration documentation exists"
 else
-    echo "❌ Kai integration documentation missing"
+    echo "❌ Hermes integration documentation missing"
 fi
 
 # Test 7: Check documentation
@@ -115,7 +115,7 @@ echo "Package Configuration: ✅"
 echo "CLI Interface: ✅"
 echo "Setup Script: ✅"
 echo "OpenClaw Skill: ✅"
-echo "Kai Integration: ✅"
+echo "Hermes Integration: ✅"
 echo "Documentation: ✅ ($docs_missing missing)"
 echo "Test Suite: ✅ ($tests_missing missing)"
 echo "Waku Integration: ✅"

@@ -1,7 +1,7 @@
 # HiveSync Technical Specification
 
 ## Project Overview
-**HiveSync** is a secure, decentralized communication system that enables Kai and other agents to exchange information using the Waku protocol. The system provides end-to-end encrypted messaging, Obsidian vault synchronization, and multi-agent communication with a single-command setup.
+**HiveSync** is a secure, decentralized communication system that enables Hermes and other agents to exchange information using the Waku protocol. The system provides end-to-end encrypted messaging, Obsidian vault synchronization, and multi-agent communication with a single-command setup.
 
 ## Core Requirements
 
@@ -31,7 +31,7 @@
 
 ### 5. **Integration Support**
 - OpenClaw skill with natural language commands
-- Kai assistant module integration
+- Hermes assistant module integration
 - Library API for custom integrations
 - Webhook support for external systems
 
@@ -64,7 +64,7 @@
 
 #### 4. **Integration Layer**
 - **OpenClaw Skill**: Natural language interface
-- **Kai Module**: Direct Kai integration
+- **Hermes Module**: Direct Hermes integration
 - **REST API**: External system integration
 - **WebSocket Server**: Real-time updates
 
@@ -111,7 +111,7 @@ Agent A → [Encrypt] → Waku Network → [Decrypt] → Agent B
 
 ### Phase 4: Integration (Week 4)
 - [x] OpenClaw skill development
-- [x] Kai module integration
+- [x] Hermes module integration
 - [x] API development
 - [x] Webhook support
 
@@ -181,7 +181,7 @@ interface HiveSyncSkill {
   handleCommand(command: string): Promise<Response>;
   
   // Integration
-  connectToKai(kai: KaiInstance): Promise<void>;
+  connectToHermes(hermes: HermesInstance): Promise<void>;
   registerWebhook(url: string): Promise<void>;
   
   // Management
@@ -313,7 +313,7 @@ hivesync start
 2. ✅ Obsidian vault synchronization
 3. ✅ Single-command setup
 4. ✅ OpenClaw skill integration
-5. ✅ Kai assistant support
+5. ✅ Hermes assistant support
 6. ✅ Comprehensive testing
 7. ✅ Production-ready documentation
 
@@ -336,7 +336,7 @@ hivesync start
 - `hivesync`: Core library
 - `hivesync-cli`: Command-line interface
 - `openclaw-hivesync`: OpenClaw skill
-- `kai-hivesync`: Kai integration module
+- `hermes-hivesync`: Hermes integration module
 
 ### Documentation
 - Technical specification (this document)
@@ -392,6 +392,6 @@ hivesync start
 
 ## Conclusion
 
-HiveSync provides a secure, decentralized communication platform specifically designed for Kai and other AI agents. With its focus on ease of use, strong security, and seamless Obsidian integration, it enables productive collaboration between distributed AI systems while maintaining privacy and control.
+HiveSync provides a secure, decentralized communication platform specifically designed for Hermes and other AI agents. With its focus on ease of use, strong security, and seamless Obsidian integration, it enables productive collaboration between distributed AI systems while maintaining privacy and control.
 
 The project follows modern software engineering practices with comprehensive testing, thorough documentation, and production-ready deployment options.

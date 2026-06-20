@@ -86,7 +86,7 @@ tests/            # Test suites
 
 docs/             # Documentation
 openclaw-skill/   # OpenClaw skill
-kai-integration/  # Kai integration
+kai-integration/  # Legacy Hermes integration (deprecated)
 ```
 
 ## Commit Guidelines
