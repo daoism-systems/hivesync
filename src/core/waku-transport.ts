@@ -130,7 +130,8 @@ export class WakuTransport implements Transport {
         await delay(1500 * attempt);
       }
     }
-    throw new Error(`LightPush failed after ${retries} attempts: ${lastFailures}`);
+    // Don't crash — LightPush failures are a Waku network condition, not fatal.
+    logger.warn(`LightPush failed after ${retries} attempts (agent can still receive): ${lastFailures}`);
   }
 
   async getPeerCount(): Promise<number> {
