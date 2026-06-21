@@ -9,7 +9,8 @@ import { verifyPassword } from './crypto';
 import { StorageManager } from '../storage/storage-manager';
 import { QuarantineStore } from '../storage/quarantine-store';
 import { RealTimeSyncManager } from '../sync/real-time-sync';
-import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage } from '../types';
+import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage, Contact } from '../types';
+import { HandshakeInfo } from './hivesync-bridge';
 import { logger } from '../utils/logger';
 
 // Meta fields carried inside the (encrypted) message content, stripped before
@@ -75,10 +76,22 @@ export class BridgeManager extends EventEmitter {
       await this.storage.initialize();
       await this.registerAgent();
 
-      // Persist agents we discover on the network, and notify listeners.
+      // Persist agents we discover on the network, and notify listeners. The
+      // HiveSync core auto-initiates the handshake shortly after discovery.
       this.hivesync.onAgentDiscovered(async (agent) => {
         await this.storage.saveAgent(agent);
         this.emit('agentDiscovered', agent);
+      });
+      // On a confirmed handshake, persist capabilities + promote to a trusted
+      // "friend", then surface the event for UIs/agents.
+      this.hivesync.onHandshakeConfirmed(async (info) => {
+        await this.storage.saveAgentHandshake(
+          info.agentId,
+          'confirmed',
+          info.capabilities,
+          info.handshakeConfirmedAt
+        );
+        this.emit('handshakeConfirmed', info);
       });
       this.setupMessageHandlers();
 
@@ -374,6 +387,33 @@ export class BridgeManager extends EventEmitter {
 
   getKnownAgents(): AgentIdentity[] {
     return this.hivesync.getKnownAgents();
+  }
+
+  // --- handshake protocol --------------------------------------------------
+
+  /** Manually (re-)initiate a handshake with a peer. */
+  async initiateHandshake(agentId: string): Promise<void> {
+    await this.hivesync.sendHandshakeInit(agentId);
+  }
+
+  /** Current in-memory handshake state for a peer (null if not yet discovered). */
+  getHandshakeStatus(agentId: string): HandshakeInfo | null {
+    return this.hivesync.getHandshakeStatus(agentId);
+  }
+
+  /** Resolve once the handshake with a peer is confirmed (or fails / times out). */
+  async handshakeWait(agentId: string, timeoutMs = 10000): Promise<boolean> {
+    return this.hivesync.handshakeWait(agentId, timeoutMs);
+  }
+
+  /** All peers with a confirmed handshake (persisted contacts). */
+  async getContacts(): Promise<Contact[]> {
+    return this.storage.getAllContacts();
+  }
+
+  /** A single persisted contact (with handshake details). */
+  async getContact(agentId: string): Promise<Contact | null> {
+    return this.storage.getContact(agentId);
   }
 
   async getUnreadMessages(): Promise<Message[]> {

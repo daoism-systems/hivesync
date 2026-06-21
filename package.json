@@ -81,7 +81,7 @@
     "src",
     "docs",
     "openclaw-skill",
-    "kai-integration",  // legacy
+    "kai-integration",
     "README.md",
     "LICENSE"
   ]

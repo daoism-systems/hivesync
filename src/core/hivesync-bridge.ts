@@ -6,6 +6,9 @@ import {
   Envelope,
   AnnouncePayload,
   AgentIdentity,
+  HandshakeStatus,
+  HandshakeInitPayload,
+  HandshakeAckPayload,
 } from '../types';
 import { Identity } from './identity';
 import { fingerprint } from './crypto';
@@ -17,6 +20,13 @@ const ENVELOPE_VERSION = 1;
 const BROADCAST = 'broadcast';
 const MAX_SEEN_IDS = 5000;
 
+/** Our advertised protocol version and capabilities, sent in handshakes. */
+const AGENT_VERSION = '2.0.0';
+const AGENT_CAPABILITIES = ['text', 'file', 'command', 'sync', 'obsidian'];
+
+/** Delay before auto-initiating a handshake on a fresh discovery. */
+const HANDSHAKE_INIT_DELAY_MS = 1000;
+
 /** What we learn (and pin) about another agent on the network. */
 interface KnownAgent {
   agentId: string;
@@ -25,10 +35,23 @@ interface KnownAgent {
   signPublicKey: string;
   encPublicKey: string;
   lastSeen: Date;
+  handshakeStatus: HandshakeStatus;
+  capabilities?: string[];
+  handshakeConfirmedAt?: Date;
+}
+
+/** Summary of where a handshake with a peer stands. */
+export interface HandshakeInfo {
+  agentId: string;
+  agentName: string;
+  status: HandshakeStatus;
+  capabilities: string[];
+  handshakeConfirmedAt?: Date;
 }
 
 export type MessageHandler = (message: Message) => void | Promise<void>;
 export type AgentDiscoveredHandler = (agent: AgentIdentity) => void | Promise<void>;
+export type HandshakeConfirmedHandler = (info: HandshakeInfo) => void | Promise<void>;
 
 /**
  * HiveSync messaging core. Sits on top of {@link WakuTransport} and provides:
@@ -44,6 +67,7 @@ export class HiveSync {
 
   private readonly messageHandlers = new Map<MessageType, MessageHandler>();
   private readonly agentDiscoveredHandlers: AgentDiscoveredHandler[] = [];
+  private readonly handshakeConfirmedHandlers: HandshakeConfirmedHandler[] = [];
   private readonly knownAgents = new Map<string, KnownAgent>();
   private readonly seenIds = new Set<string>();
   private readonly seenOrder: string[] = [];
@@ -96,6 +120,10 @@ export class HiveSync {
 
   onAgentDiscovered(handler: AgentDiscoveredHandler): void {
     this.agentDiscoveredHandlers.push(handler);
+  }
+
+  onHandshakeConfirmed(handler: HandshakeConfirmedHandler): void {
+    this.handshakeConfirmedHandlers.push(handler);
   }
 
   getKnownAgents(): AgentIdentity[] {
@@ -192,6 +220,27 @@ export class HiveSync {
       return;
     }
 
+    // Handshake frames bypass auth/classify (like ANNOUNCE): they carry no
+    // secrets and must work before any password is exchanged. They are still
+    // signature- and TOFU-verified above. Only handle ones addressed to us.
+    if (envelope.type === MessageType.HANDSHAKE_INIT || envelope.type === MessageType.HANDSHAKE_ACK) {
+      if (envelope.to !== this.identity.agentId) return;
+      let payload: any;
+      try {
+        payload = this.decodeContent(envelope);
+      } catch (error) {
+        logger.warn(`Failed to decode handshake ${envelope.id} from ${envelope.from}:`, error);
+        return;
+      }
+      if (pinned) pinned.lastSeen = new Date();
+      if (envelope.type === MessageType.HANDSHAKE_INIT) {
+        await this.handleHandshakeInit(envelope.from, payload as HandshakeInitPayload);
+      } else {
+        await this.handleHandshakeAck(envelope.from, payload as HandshakeAckPayload);
+      }
+      return;
+    }
+
     // Routing: only process messages addressed to us or broadcast.
     if (envelope.to !== this.identity.agentId && envelope.to !== BROADCAST) {
       return;
@@ -264,7 +313,9 @@ export class HiveSync {
       return;
     }
 
-    const isNew = !this.knownAgents.has(payload.agentId);
+    // Preserve any handshake state we already established across re-announces.
+    const prior = this.knownAgents.get(payload.agentId);
+    const isNew = !prior;
     this.knownAgents.set(payload.agentId, {
       agentId: payload.agentId,
       agentName: payload.agentName,
@@ -272,6 +323,9 @@ export class HiveSync {
       signPublicKey: payload.signPublicKey,
       encPublicKey: payload.encPublicKey,
       lastSeen: new Date(),
+      handshakeStatus: prior?.handshakeStatus ?? 'none',
+      capabilities: prior?.capabilities,
+      handshakeConfirmedAt: prior?.handshakeConfirmedAt,
     });
 
     if (isNew) {
@@ -290,6 +344,14 @@ export class HiveSync {
       }
       // Reply so the newcomer learns about us promptly.
       await this.announce().catch((e) => logger.debug('Failed to re-announce:', e));
+      // Auto-initiate a handshake shortly after discovery (let the announce
+      // round-trip settle so both sides know each other's keys first).
+      const t = setTimeout(() => {
+        void this.sendHandshakeInit(payload.agentId).catch((e) =>
+          logger.debug('Failed to initiate handshake:', e)
+        );
+      }, HANDSHAKE_INIT_DELAY_MS);
+      t.unref?.();
     }
   }
 
@@ -309,6 +371,122 @@ export class HiveSync {
       content: payload,
       encrypted: false,
     });
+  }
+
+  // --- handshake protocol --------------------------------------------------
+
+  /** Send a HANDSHAKE_INIT to a peer, marking the handshake pending. */
+  async sendHandshakeInit(agentId: string): Promise<void> {
+    const known = this.knownAgents.get(agentId);
+    if (known && known.handshakeStatus !== 'confirmed') {
+      known.handshakeStatus = 'pending';
+    }
+    const payload: HandshakeInitPayload = {
+      agentName: this.identity.agentName,
+      agentVersion: AGENT_VERSION,
+      capabilities: AGENT_CAPABILITIES,
+      timestamp: Date.now(),
+    };
+    await this.sendMessage({
+      sender: this.identity.agentId,
+      recipient: agentId,
+      type: MessageType.HANDSHAKE_INIT,
+      content: payload,
+      encrypted: false,
+    });
+    logger.debug(`Handshake init sent to ${agentId}`);
+  }
+
+  /** Reply to a HANDSHAKE_INIT, advertising our capabilities. */
+  async sendHandshakeAck(agentId: string, accepted: boolean): Promise<void> {
+    const payload: HandshakeAckPayload = {
+      accepted,
+      agentName: this.identity.agentName,
+      agentVersion: AGENT_VERSION,
+      capabilities: AGENT_CAPABILITIES,
+      timestamp: Date.now(),
+    };
+    await this.sendMessage({
+      sender: this.identity.agentId,
+      recipient: agentId,
+      type: MessageType.HANDSHAKE_ACK,
+      content: payload,
+      encrypted: false,
+    });
+    logger.debug(`Handshake ack (accepted=${accepted}) sent to ${agentId}`);
+  }
+
+  private async handleHandshakeInit(from: string, payload: HandshakeInitPayload): Promise<void> {
+    const known = this.knownAgents.get(from);
+    const capabilities = Array.isArray(payload.capabilities) ? payload.capabilities : [];
+    if (known) {
+      known.capabilities = capabilities;
+    }
+    // Keep it simple: always accept. Reply, then mark the peer confirmed.
+    await this.sendHandshakeAck(from, true).catch((e) =>
+      logger.debug('Failed to send handshake ack:', e)
+    );
+    if (known) {
+      known.handshakeStatus = 'confirmed';
+      known.handshakeConfirmedAt = new Date();
+    }
+    logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
+    await this.notifyHandshakeConfirmed(from);
+  }
+
+  private async handleHandshakeAck(from: string, payload: HandshakeAckPayload): Promise<void> {
+    const known = this.knownAgents.get(from);
+    const capabilities = Array.isArray(payload.capabilities) ? payload.capabilities : [];
+    if (known) {
+      known.capabilities = capabilities;
+      known.handshakeStatus = payload.accepted ? 'confirmed' : 'failed';
+      if (payload.accepted) known.handshakeConfirmedAt = new Date();
+    }
+    if (payload.accepted) {
+      logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
+      await this.notifyHandshakeConfirmed(from);
+    } else {
+      logger.warn(`Handshake rejected by ${from}`);
+    }
+  }
+
+  private async notifyHandshakeConfirmed(agentId: string): Promise<void> {
+    const known = this.knownAgents.get(agentId);
+    const info: HandshakeInfo = {
+      agentId,
+      agentName: known?.agentName ?? agentId,
+      status: 'confirmed',
+      capabilities: known?.capabilities ?? [],
+      handshakeConfirmedAt: known?.handshakeConfirmedAt ?? new Date(),
+    };
+    for (const cb of this.handshakeConfirmedHandlers) {
+      await cb(info);
+    }
+  }
+
+  /** Current handshake state for a peer, or null if the peer is unknown. */
+  getHandshakeStatus(agentId: string): HandshakeInfo | null {
+    const known = this.knownAgents.get(agentId);
+    if (!known) return null;
+    return {
+      agentId: known.agentId,
+      agentName: known.agentName,
+      status: known.handshakeStatus,
+      capabilities: known.capabilities ?? [],
+      handshakeConfirmedAt: known.handshakeConfirmedAt,
+    };
+  }
+
+  /** Resolve once the handshake with a peer is confirmed (or fails / times out). */
+  async handshakeWait(agentId: string, timeoutMs = 10000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const known = this.knownAgents.get(agentId);
+      if (known?.handshakeStatus === 'confirmed') return true;
+      if (known?.handshakeStatus === 'failed') return false;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return this.knownAgents.get(agentId)?.handshakeStatus === 'confirmed';
   }
 
   private async sendAck(messageId: string, recipient: string): Promise<void> {

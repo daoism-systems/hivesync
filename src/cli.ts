@@ -139,14 +139,14 @@ program
       const config = await loadConfig();
       const bridge = new BridgeManager(config);
       await bridge.start();
-      
+
       if (options.password) {
         bridge.setAgentPassword(recipient, options.password);
       }
-      
+
       const msgId = await bridge.sendTextMessage(recipient, message);
       logger.success(`Message sent! ID: ${msgId}`);
-      
+
       await bridge.stop();
     } catch (error) {
       logger.error('Failed to send message:', error);
@@ -236,6 +236,96 @@ program
       await bridge.stop();
     } catch (error) {
       logger.error('Failed to list agents:', error);
+    }
+  });
+
+program
+  .command('handshake <agentId>')
+  .description('Initiate a handshake (capability + trust negotiation) with an agent')
+  .action(async (agentId) => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+
+      console.log(chalk.cyan(`\n=== Handshake with ${agentId} ===\n`));
+      console.log(chalk.gray('Waiting for the agent to be discovered...'));
+      const found = await bridge.waitForAgent(agentId, 15000);
+      if (!found) {
+        console.log(chalk.red('Agent not discovered on the network.'));
+        await bridge.stop();
+        return;
+      }
+
+      await bridge.initiateHandshake(agentId);
+      console.log(chalk.gray('Handshake initiated, waiting for acknowledgement...'));
+      const confirmed = await bridge.handshakeWait(agentId, 10000);
+
+      const info = bridge.getHandshakeStatus(agentId);
+      if (confirmed) {
+        console.log(chalk.green(`✅ Handshake confirmed with ${info?.agentName ?? agentId}`));
+        console.log(chalk.white(`   capabilities: ${(info?.capabilities ?? []).join(', ') || 'none'}`));
+      } else {
+        console.log(chalk.yellow(`⏳ Handshake not confirmed (status: ${info?.status ?? 'unknown'})`));
+      }
+
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to handshake:', error);
+    }
+  });
+
+program
+  .command('contacts')
+  .description('List confirmed contacts (agents with a completed handshake)')
+  .action(async () => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+
+      const contacts = await bridge.getContacts();
+      console.log(chalk.cyan(`\n=== Contacts (${contacts.length}) ===\n`));
+      if (contacts.length === 0) {
+        console.log(chalk.yellow('No confirmed contacts yet.'));
+      } else {
+        contacts.forEach((c, i) => {
+          console.log(chalk.white(`${i + 1}. ${c.name} (${c.id})`));
+          console.log(chalk.gray(`   capabilities: ${c.capabilities.join(', ') || 'none'}`));
+          console.log(chalk.gray(`   confirmed: ${c.handshakeConfirmedAt?.toLocaleString() ?? 'n/a'}`));
+        });
+      }
+
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to list contacts:', error);
+    }
+  });
+
+program
+  .command('contact <agentId>')
+  .description('Show handshake and capability details for one agent')
+  .action(async (agentId) => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+
+      const contact = await bridge.getContact(agentId);
+      console.log(chalk.cyan(`\n=== Contact ${agentId} ===\n`));
+      if (!contact) {
+        console.log(chalk.yellow('Unknown agent (never discovered).'));
+      } else {
+        console.log(chalk.white(`Name: ${contact.name}`));
+        console.log(chalk.white(`Handshake: ${contact.handshakeStatus}`));
+        console.log(chalk.white(`Capabilities: ${contact.capabilities.join(', ') || 'none'}`));
+        console.log(chalk.gray(`Confirmed: ${contact.handshakeConfirmedAt?.toLocaleString() ?? 'n/a'}`));
+        console.log(chalk.gray(`Last seen: ${contact.lastSeen?.toLocaleString() ?? 'n/a'}`));
+      }
+
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to read contact:', error);
     }
   });
 

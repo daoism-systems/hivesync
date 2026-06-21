@@ -32,6 +32,40 @@ export enum MessageType {
   ACK = 'ack',
   /** Presence/discovery: "I'm here, here are my public keys". */
   ANNOUNCE = 'announce',
+  /** Handshake: sent on first discovery to negotiate capabilities/trust. */
+  HANDSHAKE_INIT = 'handshake_init',
+  /** Handshake: response to a HANDSHAKE_INIT. */
+  HANDSHAKE_ACK = 'handshake_ack',
+}
+
+/** Lifecycle of a handshake with a peer. */
+export type HandshakeStatus = 'none' | 'pending' | 'confirmed' | 'failed';
+
+/** Payload of a HANDSHAKE_INIT message — sent on first discovery. */
+export interface HandshakeInitPayload {
+  agentName: string;
+  agentVersion: string;
+  capabilities: string[];
+  timestamp: number;
+}
+
+/** Payload of a HANDSHAKE_ACK message — response to a HANDSHAKE_INIT. */
+export interface HandshakeAckPayload {
+  accepted: boolean;
+  agentName: string;
+  agentVersion: string;
+  capabilities: string[];
+  timestamp: number;
+}
+
+/** A peer with a completed (or in-progress) handshake. */
+export interface Contact {
+  id: string;
+  name: string;
+  capabilities: string[];
+  handshakeStatus: HandshakeStatus;
+  handshakeConfirmedAt?: Date;
+  lastSeen?: Date;
 }
 
 /**

@@ -1,6 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
-import { Message, AgentIdentity, ObsidianNote, SyncState } from '../types';
+import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -55,9 +55,15 @@ export class StorageManager {
         key_id TEXT,
         created_at DATETIME NOT NULL,
         last_seen DATETIME,
-        trusted INTEGER DEFAULT 0
+        trusted INTEGER DEFAULT 0,
+        handshake_status TEXT DEFAULT 'none',
+        capabilities TEXT,
+        handshake_confirmed_at DATETIME
       )
     `);
+
+    // Migrate older agents tables that predate the handshake columns.
+    await this.migrateAgentsTable();
 
     // Obsidian notes table
     await this.db.exec(`
@@ -91,6 +97,21 @@ export class StorageManager {
       CREATE INDEX IF NOT EXISTS idx_notes_path ON obsidian_notes(path);
       CREATE INDEX IF NOT EXISTS idx_notes_hash ON obsidian_notes(hash);
     `);
+  }
+
+  /** Add handshake columns to a pre-existing agents table (idempotent). */
+  private async migrateAgentsTable(): Promise<void> {
+    const cols: any[] = await this.db.all(`PRAGMA table_info(agents)`);
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('handshake_status')) {
+      await this.db.exec(`ALTER TABLE agents ADD COLUMN handshake_status TEXT DEFAULT 'none'`);
+    }
+    if (!names.has('capabilities')) {
+      await this.db.exec(`ALTER TABLE agents ADD COLUMN capabilities TEXT`);
+    }
+    if (!names.has('handshake_confirmed_at')) {
+      await this.db.exec(`ALTER TABLE agents ADD COLUMN handshake_confirmed_at DATETIME`);
+    }
   }
 
   // Message operations
@@ -239,6 +260,75 @@ export class StorageManager {
     );
   }
 
+  // Handshake / contacts operations
+
+  /**
+   * Persist the outcome of a handshake. A confirmed handshake promotes the peer
+   * to a trusted "friend" (trusted = 1).
+   */
+  async saveAgentHandshake(
+    agentId: string,
+    status: HandshakeStatus,
+    capabilities: string[],
+    confirmedAt?: Date
+  ): Promise<void> {
+    await this.db.run(
+      `UPDATE agents
+         SET handshake_status = ?,
+             capabilities = ?,
+             handshake_confirmed_at = ?,
+             trusted = ?
+       WHERE id = ?`,
+      [
+        status,
+        JSON.stringify(capabilities ?? []),
+        confirmedAt ? confirmedAt.toISOString() : null,
+        status === 'confirmed' ? 1 : 0,
+        agentId,
+      ]
+    );
+  }
+
+  async getAgentHandshake(
+    agentId: string
+  ): Promise<{ status: HandshakeStatus; capabilities: string[]; confirmedAt?: Date } | null> {
+    const row = await this.db.get(
+      `SELECT handshake_status, capabilities, handshake_confirmed_at FROM agents WHERE id = ?`,
+      [agentId]
+    );
+    if (!row) return null;
+    return {
+      status: (row.handshake_status || 'none') as HandshakeStatus,
+      capabilities: parseCapabilities(row.capabilities),
+      confirmedAt: row.handshake_confirmed_at ? new Date(row.handshake_confirmed_at) : undefined,
+    };
+  }
+
+  /** All peers whose handshake has been confirmed, most recently seen first. */
+  async getAllContacts(): Promise<Contact[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM agents WHERE handshake_status = 'confirmed' ORDER BY last_seen DESC`
+    );
+    return rows.map((row: any) => this.rowToContact(row));
+  }
+
+  /** A single contact (with handshake details), or null if unknown. */
+  async getContact(agentId: string): Promise<Contact | null> {
+    const row = await this.db.get(`SELECT * FROM agents WHERE id = ?`, [agentId]);
+    return row ? this.rowToContact(row) : null;
+  }
+
+  private rowToContact(row: any): Contact {
+    return {
+      id: row.id,
+      name: row.name,
+      capabilities: parseCapabilities(row.capabilities),
+      handshakeStatus: (row.handshake_status || 'none') as HandshakeStatus,
+      handshakeConfirmedAt: row.handshake_confirmed_at ? new Date(row.handshake_confirmed_at) : undefined,
+      lastSeen: row.last_seen ? new Date(row.last_seen) : undefined,
+    };
+  }
+
   // Obsidian notes operations
   async saveNote(note: ObsidianNote): Promise<void> {
     await this.db.run(
@@ -339,5 +429,16 @@ export class StorageManager {
       }
       this.db = null;
     }
+  }
+}
+
+/** Tolerantly decode the JSON-encoded capabilities column. */
+function parseCapabilities(raw: any): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
