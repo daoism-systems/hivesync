@@ -146,9 +146,78 @@ export async function startTui(
     label: ' write a message ',
     inputOnFocus: true,
     keys: true,
+    vi: true,
     mouse: true,
     style: { fg: 'white', bg: TG.ink, border: { fg: TG.blue } },
   });
+
+  // blessed's textbox cannot move the cursor mid-line: its keypress handler
+  // has a literal no-op for the arrow keys (see "TODO: Handle directional
+  // keys" in node_modules/blessed/lib/widgets/textarea.js) and always anchors
+  // the cursor to the end of the buffer. We layer a minimal single-line cursor
+  // editor on top so left/right (and home/end/delete) edit at the caret.
+  {
+    const ib = input as any;
+    ib._cursor = 0; // caret offset into ib.value (0..length)
+
+    // Re-render the visible slice and place the terminal cursor at the caret,
+    // scrolling horizontally so the caret is always on screen.
+    ib._updateCursor = function (this: any): void {
+      if (this.screen.focused !== this) return;
+      const lpos = this._getCoords();
+      if (!lpos) return;
+      const value: string = this.value || '';
+      this._cursor = Math.max(0, Math.min(this._cursor ?? value.length, value.length));
+      const win = Math.max(1, (this.width as number) - this.iwidth - 1);
+      let start: number = this._scroll || 0;
+      if (this._cursor < start) start = this._cursor;
+      if (this._cursor > start + win) start = this._cursor - win;
+      this._scroll = start;
+      const shown = value.slice(start, start + win + 1);
+      this.setContent(this.censor ? Array(shown.length + 1).join('*') : shown);
+      const cy = lpos.yi + this.itop;
+      const cx = lpos.xi + this.ileft + (this._cursor - start);
+      const program = this.screen.program;
+      if (cy !== program.y || cx !== program.x) program.cup(cy, cx);
+    };
+
+    ib._listener = function (this: any, ch: string, key: any): void {
+      const value: string = this.value || '';
+      const c: number = Math.max(0, Math.min(this._cursor ?? value.length, value.length));
+      if (key.name === 'return') return;
+      if (key.name === 'enter') return this._done(null, this.value);
+      if (key.name === 'escape') return this._done(null, null);
+      if (key.name === 'up' || key.name === 'down') return;
+      if (key.name === 'left') {
+        this._cursor = Math.max(0, c - 1);
+      } else if (key.name === 'right') {
+        this._cursor = Math.min(value.length, c + 1);
+      } else if (key.name === 'home') {
+        this._cursor = 0;
+      } else if (key.name === 'end') {
+        this._cursor = value.length;
+      } else if (key.name === 'backspace') {
+        if (c > 0) {
+          this.value = value.slice(0, c - 1) + value.slice(c);
+          this._cursor = c - 1;
+        }
+      } else if (key.name === 'delete') {
+        if (c < value.length) this.value = value.slice(0, c) + value.slice(c + 1);
+      } else if (ch && !/^[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]$/.test(ch)) {
+        this.value = value.slice(0, c) + ch + value.slice(c);
+        this._cursor = c + 1;
+      } else {
+        return;
+      }
+      this._updateCursor();
+      this.screen.render();
+    };
+
+    // Start the caret at the end of whatever is in the box each time it focuses.
+    input.on('focus', () => {
+      ib._cursor = (ib.value || '').length;
+    });
+  }
 
   // ============================================================== overlays
   const help = blessed.box({
@@ -354,8 +423,10 @@ export async function startTui(
       `${pad0}{${bg}-bg}{#FFFFFF-fg}{bold} ${s.padEnd(contentW)} {/}`;
 
     for (const l of wrapped.length ? wrapped : ['']) chatLog.add(bubbleLine(l));
-    // Light meta text so the timestamp/receipt stays legible on the bright bubble.
-    chatLog.add(`${pad0}{${bg}-bg}{#B0D4F1-fg} ${meta.padStart(contentW)} {/}`);
+// The meta line (time · ✓ · lock) sits on the coloured bubble, so use a
+    // plain white fg — TG.muted grey is unreadable on both the green outgoing
+    // and blue incoming backgrounds.
+    chatLog.add(`${pad0}{${bg}-bg}{white-fg} ${meta.padStart(contentW)} {/}`);
     chatLog.add(''); // breathing room between bubbles
   }
 
