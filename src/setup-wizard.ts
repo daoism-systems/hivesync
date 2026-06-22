@@ -100,10 +100,10 @@ export async function runSetupWizard(): Promise<void> {
       syncInterval: 30, // presence announce interval (seconds)
       waku: {
         listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
-        // Empty => default bootstrap (The Waku Network).
         bootstrapNodes: answers.useCustomNodes
           ? answers.customNodes.split('\n').filter((n: string) => n.trim())
           : [],
+        directPeers: [],
         clusterId: 1,
         numShardsInCluster: 8,
         contentTopic: '/hivesync/1/agents/proto',

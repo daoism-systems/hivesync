@@ -120,6 +120,10 @@ export class WakuTransport implements Transport {
       networkConfig,
       routingInfos: [routingInfo],
       libp2p: {
+        addresses: {
+          listen: this.config.listenAddresses,
+        },
+        filterMultiaddrs: false,
         services: {
           pubsub: wakuGossipSub({
             defaultBootstrap: useDefaultBootstrap,
@@ -145,6 +149,19 @@ export class WakuTransport implements Transport {
     await waitForRemotePeer(this.node, [Protocols.Relay, Protocols.Filter], peerWaitTimeoutMs).catch(() => {
       logger.warn('Timed out waiting for peers — will continue anyway');
     });
+
+    // Connect to any configured direct peers.
+    if (this.config.directPeers && this.config.directPeers.length > 0) {
+      for (const peerAddr of this.config.directPeers) {
+        try {
+          logger.info(`Dialing direct peer: ${peerAddr}`);
+          await this.node.libp2p.dial(peerAddr);
+          logger.info(`Connected to direct peer: ${peerAddr}`);
+        } catch (err) {
+          logger.warn(`Failed to dial direct peer ${peerAddr}: ${(err as Error).message}`);
+        }
+      }
+    }
 
     // The node derives the pubsub topic/shard from its networkConfig + content topic.
     this.encoder = this.node.createEncoder({ contentTopic: this.config.contentTopic });

@@ -14,6 +14,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
     listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
     // Empty => use @waku/sdk's default bootstrap (The Waku Network).
     bootstrapNodes: [],
+    directPeers: [],
     clusterId: 1,
     numShardsInCluster: 8,
     contentTopic: '/hivesync/1/agents/proto',

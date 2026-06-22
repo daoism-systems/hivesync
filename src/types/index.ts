@@ -142,6 +142,8 @@ export interface SyncState {
 export interface WakuConfig {
   listenAddresses: string[];
   bootstrapNodes: string[];
+  /** Direct peers to connect to on startup (multiaddress strings). */
+  directPeers: string[];
   /** Waku cluster id (The Waku Network is cluster 1). */
   clusterId: number;
   /** Number of shards in the (auto-sharding) cluster. */
