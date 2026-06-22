@@ -31,11 +31,38 @@ export async function startTui(
     fullUnicode: true,
     title: 'HiveSync',
     autoPadding: true,
+    // Merge adjacent box borders so junctions render as single clean glyphs
+    // instead of leaving stray coloured cells where two borders meet.
+    dockBorders: true,
     ...screenOptions,
   });
 
   screen.program.alternateBuffer();
   screen.program.clear();
+
+  // Debounced render: network events (agentDiscovered, text bursts) can fire
+  // many times in one tick. Repainting synchronously on each one paints partial
+  // frames — the source of stray, differently-coloured cells. Coalesce them into
+  // a single repaint on the next tick instead.
+  let renderPending = false;
+  function schedRender(): void {
+    if (renderPending) return;
+    renderPending = true;
+    setImmediate(() => {
+      renderPending = false;
+      screen.render();
+    });
+  }
+
+  // Recompute layout cleanly after a terminal resize (debounced).
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  screen.on('resize', () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      screen.render();
+    }, 150);
+  });
 
   const unread = new Map<string, number>();
   const lastMsg = new Map<string, string>(); // peer → last message preview
@@ -328,7 +355,9 @@ export async function startTui(
     }
 
     chats.setItems(items);
-    screen.render();
+    // Coalesce rapid network-driven updates into one repaint to avoid the
+    // partial-frame colour artifacts that synchronous per-event renders cause.
+    schedRender();
   }
 
   function setFooter(text: string): void {
@@ -590,11 +619,35 @@ export async function startTui(
   });
 
   // --- handshake approval modal ------------------------------------------
+
+  // While a chat is open the message box runs in blessed's `inputOnFocus`
+  // "reading" mode, which sets screen.grabKeys = true and funnels every keypress
+  // into the textbox. A modal that merely calls .focus() doesn't escape that —
+  // blessed's own blur→rewindFocus bounces focus straight back to the box, so
+  // `y`/`n` get typed into the draft instead of approving. Tear the read down
+  // first: this releases grabKeys and lets rewindFocus settle on the chat list,
+  // after which the modal can take focus cleanly. The half-typed draft is kept.
+  function releaseInput(): void {
+    const ib = input as any;
+    if (ib._reading && typeof ib._done === 'function') ib._done(null, null);
+  }
+
+  // Return focus to wherever the user was once the approval queue drains.
+  function restoreFocusAfterApproval(): void {
+    if (view === 'chat') {
+      input.show();
+      input.focus();
+    } else {
+      focusList();
+    }
+    screen.render();
+  }
+
   function showNextApproval(): void {
     const next = approvalQueue[0];
     if (!next) {
       approval.hide();
-      focusList();
+      restoreFocusAfterApproval();
       return;
     }
     const caps = next.capabilities.length ? next.capabilities.join(', ') : 'none';
@@ -603,6 +656,7 @@ export async function startTui(
         `wants to start chatting with you.\n\n` +
         `{${TG.muted}-fg}capabilities:{/} ${escapeTags(caps)}`
     );
+    releaseInput();
     approval.show();
     approval.setFront();
     approval.focus();
@@ -620,12 +674,20 @@ export async function startTui(
     showNextApproval();
   }
 
-  approval.key(['y', 'Y'], () => resolveApproval(true));
-  approval.key(['n', 'N'], () => resolveApproval(false));
+  // blessed registers element .key() handlers globally on the program, so these
+  // fire regardless of focus. Gate them on the modal being visible, otherwise a
+  // `y` typed in a normal chat would silently approve a queued/deferred request.
+  approval.key(['y', 'Y'], () => {
+    if (!approval.hidden) resolveApproval(true);
+  });
+  approval.key(['n', 'N'], () => {
+    if (!approval.hidden) resolveApproval(false);
+  });
   approval.key('escape', () => {
+    if (approval.hidden) return;
     // Defer the decision — keep it queued so the CLI/`approve` can handle it.
     approval.hide();
-    focusList();
+    restoreFocusAfterApproval();
   });
 
   input.on('submit', async (value: string) => {
@@ -751,6 +813,7 @@ export async function startTui(
 
   async function quit(): Promise<void> {
     clearInterval(statusTimer);
+    if (resizeTimer) clearTimeout(resizeTimer);
     screen.program.normalBuffer();
     screen.destroy();
     await bridge.stop().catch(() => undefined);
