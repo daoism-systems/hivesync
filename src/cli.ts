@@ -133,16 +133,11 @@ program
 program
   .command('send <recipient> <message>')
   .description('Send a message to another agent')
-  .option('-p, --password <password>', 'Agent password for trusted delivery')
-  .action(async (recipient, message, opts) => {
+  .action(async (recipient, message) => {
     try {
       const config = await loadConfig();
       const bridge = new BridgeManager(config);
       await bridge.start();
-
-      if (opts.password) {
-        bridge.setAgentPassword(recipient, opts.password);
-      }
 
       const msgId = await bridge.sendTextMessage(recipient, message);
       logger.success(`Message sent! ID: ${msgId}`);

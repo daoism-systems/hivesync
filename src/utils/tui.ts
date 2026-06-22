@@ -459,25 +459,8 @@ export async function startTui(
     screen.render();
   }
 
-  // Ask for the peer's password (session-only), then open the chat. If we
-  // already captured it earlier this session, go straight in — the password is
-  // remembered until the app closes.
   function openAgent(peer: string): void {
-    if (bridge.hasAgentPassword(peer)) {
-      void showChat(peer);
-      return;
-    }
-    pendingPeer = peer;
-    const nm = nameFor(peer);
-    pwLabel.setContent(
-      `Their password for {${avatarColor(nm)}-fg}{bold}${escapeTags(nm)}{/bold}{/}\n` +
-        `{${TG.muted}-fg}Enter to confirm · blank = unauthenticated · Esc to cancel{/}`
-    );
-    pwInput.clearValue();
-    pwPrompt.show();
-    pwPrompt.setFront();
-    pwInput.focus();
-    screen.render();
+    void showChat(peer);
   }
 
   async function showQuarantine(): Promise<void> {
@@ -524,11 +507,7 @@ export async function startTui(
       status = `{${TG.blueLight}-fg}everyone on the topic · signed, not encrypted{/}`;
     } else {
       const known = bridge.getKnownAgents().some((a) => a.id === peer && a.encPublicKey);
-      const enc = known ? `{${TG.online}-fg}🔒 encrypted{/}` : `{red-fg}plaintext (key unknown){/}`;
-      const auth = bridge.hasAgentPassword(peer)
-        ? `{${TG.online}-fg}🔑 authenticated{/}`
-        : `{#E8B339-fg}⚠ no password{/}`;
-      status = `${enc} · ${auth}`;
+      status = known ? `{${TG.online}-fg}🔒 encrypted{/}` : `{red-fg}plaintext (key unknown){/}`;
     }
     const av = peer === BROADCAST ? '#' : initials(nm);
     const avColor = peer === BROADCAST ? TG.blueLight : avatarColor(nm);
@@ -596,15 +575,12 @@ export async function startTui(
     screen.render();
   });
 
-  pwInput.on('submit', (value: string) => {
-    if (pendingPeer) {
-      const pw = (value || '').trim();
-      if (pw) bridge.setAgentPassword(pendingPeer, pw);
-      const peer = pendingPeer;
-      pwInput.clearValue();
-      pwPrompt.hide();
-      void showChat(peer);
-    }
+  pwInput.on('submit', () => {
+    if (!pendingPeer) return;
+    const peer = pendingPeer;
+    pwInput.clearValue();
+    pwPrompt.hide();
+    void showChat(peer);
   });
   pwInput.key('escape', () => {
     pwInput.clearValue();
