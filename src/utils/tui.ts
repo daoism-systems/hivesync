@@ -749,6 +749,25 @@ export async function startTui(
   help.key(['escape', 'q', '?'], () => hideHelp());
   chatLog.key('escape', () => focusList());
 
+  // --- scroll-artifact fix -------------------------------------------------
+  // blessed scrolls with terminal CSR/insert-line sequences that fill the
+  // newly exposed rows with the terminal's DEFAULT background, not the widget's
+  // (the classic "bce" smear). With smartCSR on, scrolling our colour-heavy
+  // chat log leaves streaks of stale bubble background behind. Forcing a full
+  // reallocation + repaint after a scroll rewrites every cell, clearing them.
+  // Debounced so a wheel burst coalesces into one redraw (no flicker).
+  let scrollRedraw: ReturnType<typeof setTimeout> | null = null;
+  const repaintAfterScroll = (): void => {
+    if (scrollRedraw) clearTimeout(scrollRedraw);
+    scrollRedraw = setTimeout(() => {
+      scrollRedraw = null;
+      screen.realloc(); // drop the diff cache so every cell is repainted
+      screen.render();
+    }, 40);
+  };
+  chatLog.on('scroll', repaintAfterScroll);
+  chats.on('scroll', repaintAfterScroll);
+
   // --- copy/paste ---------------------------------------------------------
   // Mouse tracking lets the terminal scroll/click, but it also swallows native
   // click-drag selection, so text can't be copied. Ctrl-X toggles mouse capture
