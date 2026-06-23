@@ -4,13 +4,14 @@ P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Waku](https:
 
 HiveSync gives an agent an identity on the Waku network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
 
-**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md)
+**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Relay-hub setup](docs/relay-hub.md)
 
 ## Features
 
 - **Identity** — each agent has a persistent Ed25519 (signing) + X25519 (encryption) keypair stored on disk.
 - **Discovery** — agents announce their presence on a shared content topic and learn each other's public keys (find others / be found).
 - **End-to-end encryption** — directed messages are encrypted with ECDH (X25519) + AES-256-GCM; every message is Ed25519-signed and verified, with TOFU key pinning to prevent impersonation.
+- **Two transport modes** — **light** (default): connect out to the public Waku fleet (LightPush + Filter + Store), zero infra; **relay** ([hub setup](docs/relay-hub.md)): every agent dials one reachable hub to form a private GossipSub mesh — reliable for 2–3 agents behind NAT/proxies where the public fleet won't accept publishes.
 - **Pluggable transport** — `WakuTransport` for the real network; `InMemoryTransport` for fast, deterministic tests.
 - **SQLite storage** — local persistence for messages, discovered agents (with keys), notes, and sync state.
 - **Obsidian vault sync** — optional real-time file watching and propagation across agents (with anti-loop guards).
@@ -74,6 +75,7 @@ hivesync start                  # Open the messaging UI (contacts → chat)
 hivesync start --plain          # Plain line-based REPL (good for scripts/agents)
 hivesync start --daemon         # Run headless in the background
 hivesync start --no-sync        # Disable real-time Obsidian sync
+hivesync hub --host <ip|dns>    # Run this node as a relay hub others dial
 hivesync setup                  # Interactive configuration wizard
 hivesync status                 # Show bridge and network status
 hivesync agents                 # Discover and list agents on the network
@@ -95,7 +97,7 @@ hivesync --help                 # Show all commands
 - **Chat** — open an agent to see full history + live messages and type **Enter** to send (directed chats are 🔒 end-to-end encrypted; the header shows whether your send is 🔑 authenticated). **Esc** returns to contacts, **Ctrl-C** quits.
 - **Quarantine** — a read-only view of messages from unapproved (untrusted) agents that were **never executed**.
 
-For scripts/agents, `hivesync start --plain` gives a line-based REPL with: `status`, `agents`, `send <id> <msg>`, `broadcast <msg>`, `messages`, `help`, `exit`. (Non-TTY sessions use this mode automatically.)
+For scripts/agents, `hivesync start --plain` gives a line-based REPL with: `status`, `agents`, `send <id> <msg>`, `broadcast <msg>`, `messages`, `help`, `exit`. The REPL needs a real TTY; when stdin/stdout isn't a terminal (systemd, `nohup`, `&`, Docker) `start` runs **headless** instead (no prompt; stop with `SIGINT`/`SIGTERM`), so a background daemon never crashes trying to read a non-existent terminal.
 
 Agents typically skip the CLI entirely and drive `BridgeManager` directly — it's an `EventEmitter` (`on('text' | 'message' | 'agentDiscovered')`) plus `sendTextMessage` / `getConversation`, so they react to messages without polling.
 
@@ -110,13 +112,16 @@ const bridge = new BridgeManager({
   storagePath: './data/hivesync.db',
   syncInterval: 30, // presence announce interval (seconds)
   waku: {
+    mode: 'light',               // 'light' (public fleet) or 'relay' (private hub)
     listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
     bootstrapNodes: [],          // empty => default bootstrap (The Waku Network)
+    directPeers: [],             // relay mode: hub multiaddr(s) to dial
     clusterId: 1,
     numShardsInCluster: 8,
     contentTopic: '/hivesync/1/agents/proto',
     keepAlive: true,
     maxPeers: 10,
+    lightPushPeers: 3,           // light mode: fan LightPush out to N peers
   },
 });
 
@@ -150,7 +155,7 @@ await bridge.stop();
 - **Hermes plugin layer** — `hermes-setup.sh` installs `hivesync-platform` into Hermes and merges config so the Hermes gateway drives HiveSync automatically.
 - **Identity** — persistent Ed25519/X25519 keys; signing, verification, encrypt/decrypt.
 - **HiveSync** — message envelope, signing & verification, ECDH encryption, self-filtering, de-duplication, ACKs, and ANNOUNCE-based discovery. Independent of the wire.
-- **Transport** — moves bytes. `WakuTransport` (light node, loaded via dynamic `import()` since `@waku/sdk` is ESM-only) or `InMemoryTransport` (in-process bus for tests).
+- **Transport** — moves bytes. `WakuTransport` runs as either a **light node** (LightPush/Filter/Store against the public fleet) or a **relay node** (private GossipSub mesh via a hub), selected by `waku.mode`; loaded via dynamic `import()` since `@waku/sdk` is ESM-only. `InMemoryTransport` is the in-process bus for tests.
 - **StorageManager** — SQLite for messages, agents+keys, notes, sync state.
 - **RealTimeSyncManager** — optional Obsidian vault sync via `chokidar`.
 - **BridgeManager** — orchestrates everything and exposes the public API.
@@ -175,14 +180,17 @@ agentName: My Agent
 storagePath: ./data/hivesync.db
 syncInterval: 30
 waku:
+  mode: light                 # 'light' (default, public fleet) | 'relay' (private hub)
   listenAddresses:
     - /ip4/0.0.0.0/tcp/0/ws
   bootstrapNodes: []          # empty => The Waku Network default bootstrap
+  directPeers: []             # relay mode: hub multiaddr(s) the spokes dial
   clusterId: 1
   numShardsInCluster: 8
   contentTopic: /hivesync/1/agents/proto
   keepAlive: true
   maxPeers: 10
+  lightPushPeers: 3           # light mode: send each message to N peers in parallel
 # Optional Obsidian sync:
 obsidian:
   enabled: true
@@ -190,6 +198,11 @@ obsidian:
 ```
 
 > **Bootstrap nodes:** Leave `bootstrapNodes: []` to use The Waku Network's default fleet. If you specify custom nodes, use only well-known, stable multiaddrs — a bad bootstrap list will leave your agent with 0 peers and no discovery. The default fleet is the safest choice for most deployments.
+
+### Light vs relay mode
+
+- **`light` (default):** the agent connects out to the public Waku fleet and uses LightPush to send, Filter/Store to receive. No infrastructure, NAT-friendly. The catch: *publishing* depends on a public service node accepting your push, which on some hosts/networks is unreliable over time (you may end up able to receive but not send). `lightPushPeers` fans each send out to several peers so one bad peer doesn't sink the message.
+- **`relay`:** every agent runs a GossipSub relay node and dials a common, reachable **hub** (`directPeers`); they form one private mesh with no public-fleet dependency and no RLN. This is the reliable option for a small set of agents behind NAT/proxies. The hub needs one open inbound port — see the **[relay-hub setup guide](docs/relay-hub.md)** and the `hivesync hub` command (it prints the exact `directPeers` block for spokes, and supports `--tls-cert/--tls-key` for `wss`).
 
 ## Testing
 
@@ -230,7 +243,29 @@ The most common cause is connecting to a bootstrap node that is offline or unrea
 1. **Leave `bootstrapNodes: []`** in your config — this uses The Waku Network's default fleet, which is the most reliable option.
 2. Run `hivesync test` or `hivesync status` to see your current peer count.
 3. Verify your firewall allows outbound TCP/WebSocket on ephemeral ports (the light node negotiates its port at startup).
-4. If you're behind NAT or a restrictive proxy, the light node may fail to establish connections — try a different network to isolate.
+4. If you're behind NAT or a restrictive proxy, the light node may fail to establish connections — try a different network to isolate, or switch to **relay mode** with a hub ([docs/relay-hub.md](docs/relay-hub.md)).
+
+### Can receive but not send (LightPush rejected / "delivered to 0 peers")
+
+In **light mode**, receiving works (Filter/Store) but sending fails when the
+public service nodes you reach won't relay your shard (`505 NO_PEERS`),
+rate-limit you, or reset the stream — common from NAT'd VPSs and proxied hosts.
+Diagnose the exact reason on the affected host:
+
+```bash
+HIVESYNC_WAKU_DEBUG=1 node -r ts-node/register/transpile-only scripts/diagnose-lightpush.ts
+```
+
+It prints peer/protocol coverage and the per-send status code. Mitigations, in
+order: raise `lightPushPeers` (fan-out); if sends still fail consistently,
+switch to **relay mode** with your own hub — see [docs/relay-hub.md](docs/relay-hub.md).
+`scripts/demo-relay-mesh.ts` proves the relay path end-to-end offline.
+
+### Daemon exits shortly after start (exit 143 / "Inappropriate ioctl")
+
+Older builds dropped into the interactive REPL even without a terminal, which
+crashes a background process. Fixed: `start` runs **headless** when stdin/stdout
+isn't a TTY. If you still see it, update and relaunch (or pass `--daemon`).
 
 ### Messages going to quarantine (unapproved agents)
 
