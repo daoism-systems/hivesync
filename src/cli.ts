@@ -15,6 +15,26 @@ import { runConnectSequence } from './utils/splash';
 
 const program = new Command();
 
+/** Keep a daemon process alive and shut down cleanly on signals. */
+async function runHeadless(bridge: BridgeManager, label = 'daemon'): Promise<never> {
+  logger.info(`Running headless (${label}). Stop with Ctrl-C or SIGTERM.`);
+  let shuttingDown = false;
+  const shutdown = async (sig: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`Received ${sig}, shutting down...`);
+    await bridge.stop().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('uncaughtException', (err) => logger.error('uncaughtException:', err));
+  process.on('unhandledRejection', (err) => logger.error('unhandledRejection:', err));
+  const keepAlive = setInterval(() => undefined, 1 << 30);
+  void keepAlive;
+  return new Promise<never>(() => undefined); // run forever
+}
+
 // The interactive TUI paints its own "connecting to the hivemind" splash, so
 // only show the static banner for the plain/utility commands.
 const isInteractiveStart =
@@ -79,28 +99,73 @@ program
         await setupInteractiveMode(bridge);
       } else {
         // Headless daemon: no stdin reads (would crash a non-PTY process).
-        // Keep the event loop alive and shut down cleanly on signals.
-        logger.info('Running headless (daemon mode). Stop with Ctrl-C or SIGTERM.');
-        let shuttingDown = false;
-        const shutdown = async (sig: string): Promise<void> => {
-          if (shuttingDown) return;
-          shuttingDown = true;
-          logger.info(`Received ${sig}, shutting down...`);
-          await bridge.stop().catch(() => undefined);
-          process.exit(0);
-        };
-        process.on('SIGINT', () => void shutdown('SIGINT'));
-        process.on('SIGTERM', () => void shutdown('SIGTERM'));
-        // The bridge's own timers are unref'd; this keeps the process alive.
-        const keepAlive = setInterval(() => undefined, 1 << 30);
-        // Surface unexpected errors instead of dying silently in the background.
-        process.on('uncaughtException', (err) => logger.error('uncaughtException:', err));
-        process.on('unhandledRejection', (err) => logger.error('unhandledRejection:', err));
-        await new Promise<void>(() => undefined); // run forever
-        clearInterval(keepAlive);
+        await runHeadless(bridge, 'daemon mode');
       }
     } catch (error) {
       logger.error('Failed to start bridge:', error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('hub')
+  .description('Run this node as a relay hub other agents connect to')
+  .option('-c, --config <path>', 'Configuration file path', './config/hivesync.yaml')
+  .option('--port <port>', 'TCP port to listen on (ws)', '16000')
+  .option('--host <host>', 'Public host/IP spokes should dial (for the printed directPeers line)')
+  .option('--tls-cert <path>', 'TLS certificate (PEM) to listen over wss instead of ws')
+  .option('--tls-key <path>', 'TLS private key (PEM) for wss')
+  .action(async (options) => {
+    try {
+      const config = await loadConfig(options.config);
+      const wss = !!(options.tlsCert && options.tlsKey);
+      const scheme = wss ? 'tls/ws' : 'ws';
+      // Force relay-hub settings regardless of what's in the config file.
+      config.waku.mode = 'relay';
+      config.waku.directPeers = [];
+      config.waku.listenAddresses = [`/ip4/0.0.0.0/tcp/${options.port}/${scheme}`];
+      if (wss) {
+        config.waku.tls = { certPath: options.tlsCert, keyPath: options.tlsKey };
+      }
+
+      const bridge = new BridgeManager(config);
+      logger.info(`Starting relay hub on port ${options.port} (${wss ? 'wss' : 'ws'})...`);
+      const started = await bridge.start();
+      if (!started) {
+        logger.error('Failed to start hub');
+        process.exit(1);
+      }
+
+      const peerId = bridge.getPeerId();
+      const addrs = bridge.getDialableMultiaddrs();
+      const host = options.host;
+      // Build the directPeers line spokes should paste into their config.
+      const spokeAddr = host
+        ? `/ip4/${host}/tcp/${options.port}/${scheme}/p2p/${peerId}`
+        : (addrs[0] ?? `/ip4/<HOST>/tcp/${options.port}/${scheme}/p2p/${peerId}`);
+
+      console.log(chalk.cyan('\n=== HiveSync relay hub is up ===\n'));
+      console.log(chalk.white(`peerId: ${peerId}`));
+      console.log(chalk.gray('Locally bound multiaddrs:'));
+      for (const a of addrs) console.log(chalk.gray(`  ${a}`));
+      console.log(chalk.cyan('\nGive spokes this in their config/hivesync.yaml:\n'));
+      console.log(
+        chalk.white(
+          `waku:\n  mode: relay\n  directPeers:\n    - ${spokeAddr}\n  clusterId: ${config.waku.clusterId}\n  numShardsInCluster: ${config.waku.numShardsInCluster}\n  contentTopic: ${config.waku.contentTopic}`
+        )
+      );
+      if (!host) {
+        console.log(
+          chalk.yellow(
+            '\nNote: replace the host in the address above with the IP/DNS spokes actually reach\n(e.g. the SSH-tunnel target, or pass --host next time).'
+          )
+        );
+      }
+      console.log();
+
+      await runHeadless(bridge, 'relay hub');
+    } catch (error) {
+      logger.error('Failed to start hub:', error);
       process.exit(1);
     }
   });

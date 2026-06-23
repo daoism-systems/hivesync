@@ -31,6 +31,61 @@ Pick as the hub whichever agent has a reachable inbound port. On the Aleph VPS
 that is **443** (open and not intercepted; 80 is intercepted, 16000 is
 internal-only). Binding 443 needs root — the daemon already runs as root.
 
+## Quick start: `hivesync hub`
+
+On the host that will be the hub:
+
+```bash
+hivesync hub --port 16000 --host <PUBLIC_IP_OR_TUNNEL_HOST>
+```
+
+It starts a relay node, runs headless, and prints the exact block to paste into
+each spoke's `config/hivesync.yaml`, e.g.:
+
+```
+=== HiveSync relay hub is up ===
+peerId: 12D3KooW...
+Give spokes this in their config/hivesync.yaml:
+
+waku:
+  mode: relay
+  directPeers:
+    - /ip4/<HOST>/tcp/16000/ws/p2p/12D3KooW...
+  clusterId: 1
+  numShardsInCluster: 8
+  contentTopic: /hivesync/1/agents/proto
+```
+
+`--host` is what spokes actually dial: a public IP, a DNS name, or — for the
+SSH reverse-tunnel setup — `127.0.0.1` (the tunnel endpoint on the spoke side).
+
+### Over the SSH reverse tunnel (works through the Aleph proxy)
+
+The Aleph proxy intercepts 80 and 443, but an SSH reverse tunnel doesn't care:
+
+```bash
+# on the hub host (e.g. MacBook), keep this open:
+ssh -i <key> -R 16000:localhost:16000 root@<vps> -p <ssh-port>
+# hub:
+hivesync hub --port 16000 --host 127.0.0.1
+# the VPS spoke then dials /ip4/127.0.0.1/tcp/16000/ws/p2p/<hub-peerId>
+```
+
+This is your own infrastructure (your SSH, your hosts), not a third-party
+tunnelling service.
+
+### Secure WebSocket (wss) for a domain hub
+
+If the dial path needs TLS (a domain behind a TLS-terminating proxy), give the
+hub a cert and it listens on `/tls/ws`:
+
+```bash
+hivesync hub --port 443 --host hub.example.com \
+  --tls-cert /etc/letsencrypt/live/hub.example.com/fullchain.pem \
+  --tls-key  /etc/letsencrypt/live/hub.example.com/privkey.pem
+# spokes dial: /dns4/hub.example.com/tcp/443/tls/ws/p2p/<hub-peerId>
+```
+
 ## Hub config (everhomie — the reachable VPS)
 
 `config/hivesync.yaml`:

@@ -166,6 +166,13 @@ export interface WakuConfig {
   keepAlive: boolean;
   maxPeers: number;
   /**
+   * Optional TLS cert/key (PEM file paths) so a relay hub can listen over
+   * secure WebSocket (wss) — needed when the dial path requires TLS (e.g. a
+   * domain behind a proxy that TLS-terminates). Used only in relay mode with a
+   * `/tls/ws` listen address.
+   */
+  tls?: { certPath: string; keyPath: string };
+  /**
    * How many LightPush service nodes to send each message to in parallel.
    * The SDK default is 1, which fails entirely if that one peer can't relay
    * (status 505 NO_PEERS) or its stream is reset. Defaults to 3 here. Raise it

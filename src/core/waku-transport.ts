@@ -49,6 +49,22 @@ function loadMultiaddr(): Promise<any> {
   }
   return maPromise;
 }
+let wsPromise: Promise<any> | null = null;
+function loadWebSockets(): Promise<any> {
+  if (!wsPromise) {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    wsPromise = new Function('return import("@libp2p/websockets")')() as Promise<any>;
+  }
+  return wsPromise;
+}
+let wsFilterPromise: Promise<any> | null = null;
+function loadWebSocketFilters(): Promise<any> {
+  if (!wsFilterPromise) {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    wsFilterPromise = new Function('return import("@libp2p/websockets/filters")')() as Promise<any>;
+  }
+  return wsFilterPromise;
+}
 
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
@@ -143,17 +159,36 @@ export class WakuTransport implements Transport {
     // listenAddresses (hub) + directPeers (spokes dial the hub). Set
     // bootstrapNodes to also peer with extra relay nodes if desired.
     const useBootstrap = !!this.config.bootstrapNodes?.length;
+    const libp2p: any = {
+      addresses: { listen: this.config.listenAddresses ?? [] },
+      // Allow plain (non-TLS) ws multiaddrs so a Node hub can listen on /ws
+      // and Node spokes can dial it. Without this the SDK restricts to wss.
+      filterMultiaddrs: false,
+    };
+
+    // WSS: to listen on a `/tls/ws` address we must hand the websockets
+    // transport an https server (cert + key). Override the SDK's default
+    // transport with one configured for TLS.
+    if (this.config.tls) {
+      const fs = await import('fs');
+      const [{ webSockets }, { all }] = await Promise.all([
+        loadWebSockets(),
+        loadWebSocketFilters(),
+      ]);
+      const https = {
+        cert: fs.readFileSync(this.config.tls.certPath),
+        key: fs.readFileSync(this.config.tls.keyPath),
+      };
+      libp2p.transports = [webSockets({ filter: all, https })];
+      logger.info('Relay hub listening over secure WebSocket (wss)');
+    }
+
     this.node = await createRelayNode({
       defaultBootstrap: false,
       bootstrapPeers: useBootstrap ? this.config.bootstrapNodes : undefined,
       networkConfig,
       routingInfos: [routingInfo],
-      libp2p: {
-        addresses: { listen: this.config.listenAddresses ?? [] },
-        // Allow plain (non-TLS) ws multiaddrs so a Node hub can listen on /ws
-        // and Node spokes can dial it. Without this the SDK restricts to wss.
-        filterMultiaddrs: false,
-      },
+      libp2p,
     } as any);
 
     await this.node.start();
@@ -384,7 +419,14 @@ export class WakuTransport implements Transport {
           logger.warn(`Relay send reached 0 mesh peers: ${JSON.stringify(res.failures)}`);
         }
       } catch (err) {
-        logger.warn(`Relay send error: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        // Expected and harmless while no spokes are connected yet (e.g. a hub
+        // waiting for its first peer) — don't spam warnings; the bridge resends.
+        if (msg.includes('NoPeersSubscribedToTopic')) {
+          logger.debug(`Relay send skipped: no mesh peers yet (${msg})`);
+        } else {
+          logger.warn(`Relay send error: ${msg}`);
+        }
       }
       return;
     }

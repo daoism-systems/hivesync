@@ -609,6 +609,11 @@ export class HiveSync {
     };
   }
 
+  /** Multiaddrs other nodes can dial to reach this node (relay hub mode). */
+  getDialableMultiaddrs(): string[] {
+    return this.transport.getDialableMultiaddrs?.() ?? [];
+  }
+
   /** Synchronous status snapshot (no peer-count round-trip). */
   getStatusSync(): { connected: boolean; peerId?: string; knownAgents: number } {
     return {

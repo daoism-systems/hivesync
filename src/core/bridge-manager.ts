@@ -511,6 +511,16 @@ export class BridgeManager extends EventEmitter {
     }
   }
 
+  /** Multiaddrs other agents can dial to reach this node (relay hub mode). */
+  getDialableMultiaddrs(): string[] {
+    return this.hivesync.getDialableMultiaddrs();
+  }
+
+  /** This node's libp2p peer id (available after start). */
+  getPeerId(): string | undefined {
+    return this.hivesync.getStatusSync().peerId;
+  }
+
   async getSyncStatus(): Promise<any> {
     if (this.realTimeSync) {
       return this.realTimeSync.getSyncStatus();

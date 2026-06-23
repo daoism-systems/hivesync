@@ -18,6 +18,8 @@ export interface Transport {
   getPeerCount(): Promise<number>;
   /** This node's transport-level identifier, if any. */
   peerId(): string | undefined;
+  /** Multiaddrs other nodes can dial to reach this node (relay hub). */
+  getDialableMultiaddrs?(): string[];
   isStarted(): boolean;
   stop(): Promise<void>;
 }
