@@ -38,13 +38,14 @@ async function runHeadless(bridge: BridgeManager, label = 'daemon'): Promise<nev
 
 // The interactive TUI paints its own "connecting to the hivemind" splash, so
 // only show the static banner for the plain/utility commands.
+const quietCommands = ['send', 'approve', 'agents', 'contacts', 'quarantine', 'sync'];
 const isInteractiveStart =
   process.argv[2] === 'start' &&
   process.stdout.isTTY &&
   !process.argv.includes('--plain') &&
   !process.argv.includes('-d') &&
   !process.argv.includes('--daemon');
-if (!isInteractiveStart) {
+if (!isInteractiveStart && !quietCommands.includes(process.argv[2])) {
   printBanner();
 }
 
