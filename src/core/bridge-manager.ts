@@ -42,10 +42,15 @@ export class BridgeManager extends EventEmitter {
   private approvalTimer: NodeJS.Timeout | null = null;
   private processingOutbox = false;
   private isRunning = false;
+  // True when a transport was injected (tests use InMemoryTransport). The
+  // Waku-fleet startup delay below is meaningless for an in-process transport
+  // and would only slow tests, so we skip it in that case.
+  private readonly hasInjectedTransport: boolean;
 
   constructor(config: BridgeConfig, transport?: Transport) {
     super();
     this.config = config;
+    this.hasInjectedTransport = !!transport;
     const identityDir =
       config.storagePath === ':memory:'
         ? path.join(process.cwd(), 'data')
@@ -105,8 +110,11 @@ export class BridgeManager extends EventEmitter {
 
       // Brief pause so the first LightPush epoch can stabilise before the
       // initial announce/sync burst fires — prevents rate-limit rejection
-      // on the very first send.
-      await new Promise((r) => setTimeout(r, 2000));
+      // on the very first send. Only relevant for the real Waku transport;
+      // skipped when a transport is injected (tests) so it doesn't slow them.
+      if (!this.hasInjectedTransport) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
 
       // Obsidian real-time sync is strictly opt-in and never blocks messaging.
       const obsidian = this.config.obsidian;

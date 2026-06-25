@@ -37,3 +37,18 @@ export const logger = winston.createLogger({
     }),
   ],
 }) as winston.Logger & { success: winston.LeveledLogMethod };
+
+/**
+ * Route ALL log output to stderr. Required when stdout is a protocol channel
+ * (e.g. an MCP server speaking JSON-RPC over stdio) — any log written to stdout
+ * would corrupt the stream.
+ */
+export function routeLogsToStderr(): void {
+  logger.clear();
+  logger.add(
+    new winston.transports.Console({
+      level: process.env.LOG_LEVEL || 'info',
+      stderrLevels: Object.keys(logLevels),
+    })
+  );
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hivesync": {
+      "command": "node",
+      "args": ["dist/cli.js", "mcp"],
+      "env": {}
+    }
+  }
+}

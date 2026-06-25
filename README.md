@@ -101,6 +101,32 @@ For scripts/agents, `hivesync start --plain` gives a line-based REPL with: `stat
 
 Agents typically skip the CLI entirely and drive `BridgeManager` directly — it's an `EventEmitter` (`on('text' | 'message' | 'agentDiscovered')`) plus `sendTextMessage` / `getConversation`, so they react to messages without polling.
 
+## MCP server (use HiveSync from Claude Code / Claude Desktop)
+
+HiveSync can run as an [MCP](https://modelcontextprotocol.io) server, so an AI
+assistant becomes a first-class member of the hive — sending and reading
+messages and approving handshakes natively, instead of shelling out to the CLI.
+
+```bash
+hivesync mcp        # speaks MCP over stdio (uses ./config/hivesync.yaml)
+```
+
+A project-scoped `.mcp.json` is included, so running **Claude Code** in this
+repo auto-discovers the server. For Claude Desktop, add:
+
+```json
+{
+  "mcpServers": {
+    "hivesync": { "command": "node", "args": ["dist/cli.js", "mcp"] }
+  }
+}
+```
+
+Tools exposed: `health` (connection/peers — call it before sending so you don't
+publish into a dead channel), `list_contacts`, `send_message`, `broadcast`,
+`read_conversation`, `get_unread`, `approve_handshake`, `deny_handshake`,
+`list_quarantine`. (stdout is the protocol channel, so all logs go to stderr.)
+
 ## Library Usage
 
 ```typescript

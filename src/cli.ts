@@ -9,7 +9,8 @@ import { BridgeManager } from './core/bridge-manager';
 import { setupInteractiveMode } from './utils/interactive';
 import { startTui } from './utils/tui';
 import { loadConfig } from './utils/config';
-import { logger } from './utils/logger';
+import { logger, routeLogsToStderr } from './utils/logger';
+import { startMcpServer } from './mcp-server';
 import { runSetupWizard } from './setup-wizard';
 import { printBanner } from './utils/ascii';
 import { runConnectSequence } from './utils/splash';
@@ -38,15 +39,16 @@ async function runHeadless(bridge: BridgeManager, label = 'daemon'): Promise<nev
 
 // The interactive TUI paints its own "connecting to the hivemind" splash, so
 // only show the static banner for the plain/utility commands.
-const quietCommands = ['send', 'approve', 'agents', 'contacts', 'quarantine', 'sync'];
 const isInteractiveStart =
   process.argv[2] === 'start' &&
   process.stdout.isTTY &&
   !process.argv.includes('--plain') &&
   !process.argv.includes('-d') &&
   !process.argv.includes('--daemon');
-if (!isInteractiveStart && !quietCommands.includes(process.argv[2])) {
-  printBanner();
+if (!isInteractiveStart) {
+  // `mcp` speaks JSON-RPC over stdout — never print the banner (or anything) there.
+  const isMcp = process.argv[2] === 'mcp';
+  if (!isMcp) printBanner();
 }
 
 program
@@ -173,6 +175,31 @@ program
       await runHeadless(bridge, 'relay hub');
     } catch (error) {
       logger.error('Failed to start hub:', error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('mcp')
+  .description('Run HiveSync as an MCP server (stdio) so Claude Code/Desktop can join the hive')
+  .option('-c, --config <path>', 'Configuration file path', './config/hivesync.yaml')
+  .action(async (options) => {
+    // stdout is the MCP JSON-RPC channel. Force EVERY stray write off it:
+    // winston (routeLogsToStderr) AND raw console.* from our code and deps
+    // (e.g. StorageManager's "initialized" log, @waku's WebSocket banner).
+    // The MCP transport writes via process.stdout.write directly, so patching
+    // console.* is safe and keeps the protocol stream clean.
+    for (const m of ['log', 'info', 'warn', 'debug', 'trace'] as const) {
+      (console as any)[m] = (...args: unknown[]) =>
+        process.stderr.write(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ') + '\n');
+    }
+    routeLogsToStderr();
+    try {
+      const config = await loadConfig(options.config);
+      await startMcpServer(config);
+      // startMcpServer keeps the process alive via the stdio transport.
+    } catch (error) {
+      logger.error('Failed to start MCP server:', error);
       process.exit(1);
     }
   });
