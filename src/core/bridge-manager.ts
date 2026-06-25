@@ -103,6 +103,11 @@ export class BridgeManager extends EventEmitter {
         this.hivesync.restoreTrustedAgents(trusted);
       }
 
+      // Brief pause so the first LightPush epoch can stabilise before the
+      // initial announce/sync burst fires — prevents rate-limit rejection
+      // on the very first send.
+      await new Promise((r) => setTimeout(r, 2000));
+
       // Obsidian real-time sync is strictly opt-in and never blocks messaging.
       const obsidian = this.config.obsidian;
       if (obsidian?.enabled && obsidian.vaultPath) {
