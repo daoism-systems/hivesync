@@ -135,6 +135,8 @@ export class WakuTransport implements Transport {
   // Serializes + paces outbound LightPush so bursts don't trip fleet rate limits.
   private sendChain: Promise<void> = Promise.resolve();
   private lastSendAt = 0;
+  /** Track peers that recently rejected a LightPush so we blacklist them. */
+  private rejectedPeers: Map<string, number> = new Map();
 
   constructor(config: WakuConfig) {
     this.config = config;
@@ -492,8 +494,14 @@ export class WakuTransport implements Transport {
     return run;
   }
 
-  /** LightPush with retry/back-off. A partial success (>=1 peer) counts as sent. */
+  /** LightPush with retry/back-off + peer rotation (hang up on rejections). */
   private async lightPushWithRetries(payload: Uint8Array, retries: number): Promise<void> {
+    // Clear stale entries (> 60s old) from the reject list.
+    const staleCutoff = Date.now() - 60000;
+    for (const [pid, ts] of this.rejectedPeers) {
+      if (ts < staleCutoff) this.rejectedPeers.delete(pid);
+    }
+
     let lastFailures = 'unknown error';
     for (let attempt = 1; attempt <= retries; attempt++) {
       let result: any;
@@ -506,11 +514,20 @@ export class WakuTransport implements Transport {
       if ((result.successes?.length ?? 0) > 0) {
         return;
       }
-      if (result.failures?.length) lastFailures = JSON.stringify(result.failures);
-      logger.warn(`LightPush attempt ${attempt}/${retries} delivered to 0 peers: ${lastFailures}`);
-      if (attempt < retries) {
-        await delay(1500 * attempt);
+      if (result.failures?.length) {
+        lastFailures = JSON.stringify(result.failures);
+        for (const f of result.failures) {
+          if (f?.peerId) {
+            this.rejectedPeers.set(f.peerId, Date.now());
+            if (this.node?.libp2p) {
+              try { await this.node.libp2p.hangUp(f.peerId); } catch { /* best effort */ }
+            }
+          }
+        }
       }
+      logger.warn(`LightPush attempt ${attempt}/${retries} delivered to 0 peers: ${lastFailures}`);
+      const backoff = attempt < 3 ? 1500 * attempt : 4000;
+      await delay(backoff);
     }
 
     // Don't crash — push failures are a transient network condition, not fatal.
