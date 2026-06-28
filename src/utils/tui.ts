@@ -231,11 +231,12 @@ export async function startTui(
         }
       } else if (key.name === 'delete') {
         if (c < value.length) this.value = value.slice(0, c) + value.slice(c + 1);
-      } else if (ch && !/^[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]$/.test(ch)) {
-        this.value = value.slice(0, c) + ch + value.slice(c);
-        this._cursor = c + 1;
-      } else {
-        return;
+      } else if (ch) {
+        const cp = ch.codePointAt(0) || 0;
+        if (cp >= 32 && cp !== 127) {
+          this.value = value.slice(0, c) + ch + value.slice(c);
+          this._cursor = c + 1;
+        }
       }
       this._updateCursor();
       this.screen.render();
@@ -287,7 +288,8 @@ export async function startTui(
     tags: true,
     style: { bg: TG.panel },
   });
-  const approvalHint = blessed.text({
+  // approvalHint — rendered as child of approval box, not directly referenced
+  void blessed.text({
     parent: approval,
     bottom: 1,
     left: 2,
