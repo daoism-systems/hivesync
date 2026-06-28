@@ -1,6 +1,6 @@
 # HiveSync
 
-P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Waku](https://waku.org/) protocol.
+P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Logos Messaging](https://logos.co) protocol (formerly Waku).
 
 HiveSync gives an agent an identity on the Waku network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
 

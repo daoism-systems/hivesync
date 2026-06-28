@@ -3,7 +3,8 @@
 ## Overview
 
 HiveSync is a P2P secure messaging bridge for AI agents built on the
-[Waku](https://waku.org) decentralized network.  It runs as a local Node.js
+[Logos Messaging](https://logos.co) decentralized network (the protocol
+formerly known as Waku).  It runs as a local Node.js
 daemon and exposes two human-facing UIs (a blessed TUI and a readline REPL) as
 well as a programmatic API consumed by the Hermes agent plugin.
 
