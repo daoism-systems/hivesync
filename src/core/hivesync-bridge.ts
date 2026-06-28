@@ -9,6 +9,8 @@ import {
   HandshakeStatus,
   HandshakeInitPayload,
   HandshakeAckPayload,
+  AckStatus,
+  AckPayload,
 } from '../types';
 import { Identity } from './identity';
 import { fingerprint } from './crypto';
@@ -211,6 +213,9 @@ export class HiveSync {
       sig: '',
       enc: false,
     };
+    // Carry the automated-message flag (only when set, to keep the signed form
+    // backward-compatible — see canonicalBytes).
+    if (message.auto) envelope.auto = true;
 
     // Encrypt only directed messages to an agent whose encryption key we know.
     const recipientKey = recipient !== BROADCAST ? this.knownAgents.get(recipient)?.encPublicKey : undefined;
@@ -317,6 +322,7 @@ export class HiveSync {
       timestamp: new Date(envelope.ts),
       encrypted: envelope.enc,
       signature: envelope.sig,
+      auto: envelope.auto === true,
     };
 
     logger.debug(`Received ${message.type} from ${message.sender}`);
@@ -567,12 +573,25 @@ export class HiveSync {
     return this.knownAgents.get(agentId)?.handshakeStatus === 'confirmed';
   }
 
-  private async sendAck(messageId: string, recipient: string): Promise<void> {
+  /**
+   * Send a delivery receipt for `messageId`. This is the TRANSPORT-level ACK
+   * ("I received it"), so it defaults to status 'queued'; an agent that has
+   * actually acted on the message can send a follow-up ACK with 'processed'.
+   * ACKs are exempt from the auto-reply guard, so they flow even in response to
+   * an `auto:true` message — but we never ACK an ACK (the caller guards that),
+   * which is what prevents receipt storms.
+   */
+  private async sendAck(
+    messageId: string,
+    recipient: string,
+    status: AckStatus = 'queued'
+  ): Promise<void> {
+    const content: AckPayload = { originalMessageId: messageId, status };
     await this.sendMessage({
       sender: this.identity.agentId,
       recipient,
       type: MessageType.ACK,
-      content: { originalMessageId: messageId },
+      content,
       encrypted: false,
     });
   }
@@ -630,7 +649,7 @@ export class HiveSync {
  * the verifier, the signature is the output).
  */
 function canonicalBytes(env: Envelope): Buffer {
-  const canonical = JSON.stringify([
+  const fields: unknown[] = [
     env.v,
     env.id,
     env.from,
@@ -643,6 +662,13 @@ function canonicalBytes(env: Envelope): Buffer {
     env.ct ?? null,
     env.tag ?? null,
     env.epk ?? null,
-  ]);
-  return Buffer.from(canonical, 'utf-8');
+  ];
+  // Backward compatibility: only extend the signed payload when `auto` is set.
+  // An envelope without the flag therefore hashes byte-identically to the
+  // pre-`auto` format, so messages still verify across agents that haven't
+  // upgraded. A truthy `auto` does change the signature form — but only newer
+  // agents send/understand it, and non-auto traffic is unaffected throughout
+  // rollout (no version bump, no flag-day).
+  if (env.auto) fields.push('auto', true);
+  return Buffer.from(JSON.stringify(fields), 'utf-8');
 }

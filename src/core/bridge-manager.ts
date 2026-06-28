@@ -287,9 +287,14 @@ export class BridgeManager extends EventEmitter {
 
     this.hivesync.onMessage(MessageType.ACK, async (message) => {
       const originalMessageId = message.content?.originalMessageId;
-      logger.debug(`ACK from ${message.sender} for ${originalMessageId}`);
-      // Surface delivery receipts so UIs can show a "delivered" marker.
-      if (originalMessageId) this.emit('ack', originalMessageId, message.sender);
+      const status = message.content?.status ?? 'queued';
+      const senderStatus = message.content?.senderStatus;
+      logger.debug(`ACK (${status}) from ${message.sender} for ${originalMessageId}`);
+      // Surface delivery receipts so UIs / autoreply drivers can show a
+      // "delivered"/"processed" marker and apply backpressure on 'deferred'.
+      if (originalMessageId) {
+        this.emit('ack', { originalMessageId, from: message.sender, status, senderStatus });
+      }
     });
   }
 
@@ -315,35 +320,42 @@ export class BridgeManager extends EventEmitter {
     switch (command) {
       case 'status': {
         const status = await this.getStatus();
-        await this.sendTextMessage(message.sender, `Status: ${JSON.stringify(status)}`);
+        await this.sendTextMessage(message.sender, `Status: ${JSON.stringify(status)}`, true);
         break;
       }
       case 'agents': {
         const agents = await this.storage.getAllAgents();
         const list = agents.map((a) => `${a.name} (${a.id})`).join('\n');
-        await this.sendTextMessage(message.sender, `Known agents:\n${list}`);
+        await this.sendTextMessage(message.sender, `Known agents:\n${list}`, true);
         break;
       }
       case 'sync':
         if (this.realTimeSync) {
           await this.realTimeSync.syncWithAllAgents();
-          await this.sendTextMessage(message.sender, 'Sync initiated');
+          await this.sendTextMessage(message.sender, 'Sync initiated', true);
         } else {
-          await this.sendTextMessage(message.sender, 'Real-time sync not configured');
+          await this.sendTextMessage(message.sender, 'Real-time sync not configured', true);
         }
         break;
       case 'help':
         await this.sendTextMessage(
           message.sender,
-          'Commands: status, agents, sync, help'
+          'Commands: status, agents, sync, help',
+          true
         );
         break;
       default:
-        await this.sendTextMessage(message.sender, `Unknown command: ${command}`);
+        await this.sendTextMessage(message.sender, `Unknown command: ${command}`, true);
     }
   }
 
-  async sendTextMessage(recipient: string, text: string): Promise<string> {
+  /**
+   * Send a text message. Pass `auto: true` for automated sends (auto-replies,
+   * command responses, cron/daemon traffic) so the recipient's autoreply guard
+   * suppresses a reply and ping-pong is impossible. Human/explicit sends leave
+   * it false. See docs/agent-coordination-protocol.md.
+   */
+  async sendTextMessage(recipient: string, text: string, auto = false): Promise<string> {
     const willEncrypt = recipient !== 'broadcast' && this.isAgentKnown(recipient);
 
     const id = await this.hivesync.sendMessage({
@@ -352,6 +364,7 @@ export class BridgeManager extends EventEmitter {
       type: MessageType.TEXT,
       content: { text },
       encrypted: recipient !== 'broadcast',
+      auto,
     });
     // Record our own outgoing message (clean content) so history is complete.
     // Mark it delivered immediately: we've already put it on the wire here, so
@@ -364,6 +377,7 @@ export class BridgeManager extends EventEmitter {
       content: { text },
       timestamp: new Date(),
       encrypted: willEncrypt,
+      auto,
     });
     await this.storage.markDelivered(id);
     return id;
