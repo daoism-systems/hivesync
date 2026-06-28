@@ -3,7 +3,7 @@
 # HiveSync OpenClaw Setup — one-command integration with OpenClaw Agent
 #
 # Usage:
-#   bash openclaw-setup.sh [agent-name]
+#   bash openclaw-setup.sh [agent-name] [--password <password>]
 #
 # Idempotent: safe to re-run; skips unchanged steps.
 # =============================================================================
@@ -67,12 +67,24 @@ ok "Build complete — dist/cli.js ready"
 # ── 4. Generate credentials ─────────────────────────────────────────────────
 header "Generating credentials"
 
-PASSWORD=$(node -e "
-  const c = require('crypto');
-  let s = '';
-  while (s.length < 32) s += c.randomBytes(32).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
-  process.stdout.write(s.slice(0, 32));
-")
+# Check for --password flag
+CUSTOM_PW=""
+if [[ "$2" == "--password" && -n "$3" ]]; then
+  CUSTOM_PW="$3"
+fi
+
+if [[ -n "$CUSTOM_PW" ]]; then
+  PASSWORD="$CUSTOM_PW"
+  info "Using provided password"
+else
+  PASSWORD=$(node -e "
+    const c = require('crypto');
+    let s = '';
+    while (s.length < 32) s += c.randomBytes(32).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
+    process.stdout.write(s.slice(0, 32));
+  ")
+  info "Generated new 32-char password"
+fi
 SCRYPT_SALT=$(node -e "const c=require('crypto');process.stdout.write(c.randomBytes(16).toString('base64'))")
 SCRYPT_HASH=$(node -e "
   const c=require('crypto');
@@ -256,6 +268,15 @@ ok "Systemd services configured"
 
 # Enable linger so user services start at boot
 loginctl enable-linger "$(whoami)" 2>/dev/null || true
+
+# ── 9b. MCP server (optional) ────────────────────────────────────────────────
+if [[ -f "${REPO_DIR}/.mcp.json" && -f "${REPO_DIR}/dist/mcp-server.js" ]]; then
+  info "MCP server detected (.mcp.json)"
+  ok "Claude Code in this repo auto-discovers HiveSync tools:"
+  echo "    send_message, list_contacts, approve_handshake, health, etc."
+else
+  warn "MCP server not built — rebuild after npm install: npm run build"
+fi
 
 # ── 10. Health check ────────────────────────────────────────────────────────
 header "Health check"
