@@ -241,6 +241,16 @@ export interface BridgeConfig {
   syncInterval: number;
   waku: WakuConfig;
   obsidian?: ObsidianConfig;
+  /**
+   * Receive-side rate cap (circuit breaker): max actionable (text/command)
+   * messages accepted from a single sender per `rateLimitWindowMs` before the
+   * bridge sheds the excess and replies with a `rate_limited` ACK. Guards the
+   * mesh against a buggy/looping/injected peer storming us. Default 30. Set 0
+   * to disable. See docs/agent-coordination-protocol.md.
+   */
+  rateLimitPerWindow?: number;
+  /** Sliding window (ms) for `rateLimitPerWindow`. Default 60000. */
+  rateLimitWindowMs?: number;
 }
 
 /** An untrusted message held in the quarantine folder (never executed). */
