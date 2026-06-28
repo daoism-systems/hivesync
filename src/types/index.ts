@@ -20,6 +20,33 @@ export interface Message {
   timestamp: Date;
   encrypted: boolean;
   signature?: string;
+  /**
+   * Marks an automatically-generated message (an auto-reply, command response,
+   * cron/daemon send). Agents MUST NOT auto-reply to a message with `auto:true`
+   * — except an ACK delivery receipt, which always flows. This is the
+   * protocol-level guard that makes infinite auto-reply ping-pong between
+   * always-on agents structurally impossible. See
+   * docs/agent-coordination-protocol.md.
+   */
+  auto?: boolean;
+}
+
+/** Delivery-receipt status carried in a MessageType.ACK payload. */
+export type AckStatus =
+  | 'queued' // transport received it; agent hasn't processed yet
+  | 'processed' // agent acted on it
+  | 'deferred' // agent saw it but is busy; sender may retry with backoff
+  | 'rejected' // agent refused it
+  | 'rate_limited'; // receiver dropped it to shed load
+
+/** Liveness hint a peer can piggy-back on an ACK (lightweight heartbeat). */
+export type SenderStatus = 'online' | 'busy' | 'offline';
+
+/** Payload of a MessageType.ACK — a delivery receipt for `originalMessageId`. */
+export interface AckPayload {
+  originalMessageId: string;
+  status?: AckStatus;
+  senderStatus?: SenderStatus;
 }
 
 export enum MessageType {
@@ -91,6 +118,14 @@ export interface Envelope {
   to: string;
   type: MessageType;
   ts: number;
+  /**
+   * Automated-message flag (see Message.auto). Lives on the envelope so it's
+   * readable BEFORE decryption — enforcement needs no plaintext. Only included
+   * in the signed canonical bytes when true, so envelopes without it hash
+   * identically to the pre-`auto` format and still verify against agents that
+   * haven't upgraded yet.
+   */
+  auto?: boolean;
   /** Sender's Ed25519 signing public key (base64 DER) — used to verify `sig`. */
   spk: string;
   /** Base64 Ed25519 signature over the canonical envelope bytes. */

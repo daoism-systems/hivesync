@@ -28,6 +28,9 @@ function slim(m: Message): Record<string, unknown> {
     text: (m.content as any)?.text ?? m.content,
     at: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
     encrypted: m.encrypted,
+    // Automated message: do NOT auto-reply to this (an ACK receipt is fine).
+    // Only present when true, to keep the common case uncluttered.
+    ...(m.auto ? { auto: true } : {}),
   };
 }
 
@@ -99,13 +102,19 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       description:
         'Send a text message to an agent by id. Encrypted end-to-end if the peer is a trusted contact; ' +
         'otherwise sent as signed plaintext (the recipient may quarantine it until it approves the handshake). ' +
+        'Set auto:true for automated sends (auto-replies, cron/daemon traffic) — recipients MUST NOT auto-reply ' +
+        'to an auto:true message, which prevents infinite reply loops. Leave it false for human-initiated sends. ' +
         'Tip: run health first to confirm you have peers.',
-      inputSchema: { agent_id: z.string().describe('recipient agent id'), text: z.string().describe('message body') },
+      inputSchema: {
+        agent_id: z.string().describe('recipient agent id'),
+        text: z.string().describe('message body'),
+        auto: z.boolean().optional().describe('mark as an automated message (suppresses the recipient auto-reply)'),
+      },
     },
-    ready_(async ({ agent_id, text: body }: { agent_id: string; text: string }) => {
-      const id = await bridge.sendTextMessage(agent_id, body);
+    ready_(async ({ agent_id, text: body, auto }: { agent_id: string; text: string; auto?: boolean }) => {
+      const id = await bridge.sendTextMessage(agent_id, body, auto ?? false);
       const trusted = (await bridge.getContacts()).some((c: any) => c.id === agent_id);
-      return text(`Sent message ${id} to ${agent_id} (${trusted ? 'encrypted to trusted contact' : 'sent as plaintext — peer not a confirmed contact yet'}).`);
+      return text(`Sent message ${id} to ${agent_id} (${trusted ? 'encrypted to trusted contact' : 'sent as plaintext — peer not a confirmed contact yet'}${auto ? ', auto' : ''}).`);
     })
   );
 

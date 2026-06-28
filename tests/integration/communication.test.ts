@@ -171,6 +171,54 @@ describe('BridgeManager communication (in-memory transport)', () => {
     ).toBe(true);
   }, 20000);
 
+  test('auto flag round-trips end to end and is surfaced on the received message', async () => {
+    await alpha.start();
+    await beta.start();
+    await establishTrust(alpha, beta, 'agent-alpha', 'agent-beta');
+
+    await alpha.sendTextMessage('agent-beta', 'auto hello', true);
+    expect(
+      await waitFor(async () =>
+        (await beta.getUnreadMessages()).some((m) => m.content.text === 'auto hello' && m.auto === true)
+      )
+    ).toBe(true);
+
+    // A normal (human-initiated) send must NOT be flagged auto.
+    await alpha.sendTextMessage('agent-beta', 'normal hello');
+    await waitFor(async () => (await beta.getUnreadMessages()).some((m) => m.content.text === 'normal hello'));
+    const normal = (await beta.getUnreadMessages()).find((m) => m.content.text === 'normal hello')!;
+    expect(normal.auto).toBeFalsy();
+  }, 20000);
+
+  test('the auto flag lets an autoreply guard prevent infinite ping-pong', async () => {
+    await alpha.start();
+    await beta.start();
+    await establishTrust(alpha, beta, 'agent-alpha', 'agent-beta');
+
+    // Both agents are "always-on auto-repliers" that honor the protocol rule:
+    // never auto-reply to a message already marked auto:true. Without the flag
+    // (or without honoring it) this would ping-pong forever.
+    let alphaAutoReplies = 0;
+    let betaAutoReplies = 0;
+    const guardedReplier =
+      (self: BridgeManager, peer: string, bump: () => void) =>
+      async (m: { auto?: boolean; sender: string }) => {
+        if (m.auto) return; // <- the guard the protocol enables
+        bump();
+        await self.sendTextMessage(peer, 'auto-reply', true);
+      };
+    beta.on('text', guardedReplier(beta, 'agent-alpha', () => (betaAutoReplies += 1)));
+    alpha.on('text', guardedReplier(alpha, 'agent-beta', () => (alphaAutoReplies += 1)));
+
+    await alpha.sendTextMessage('agent-beta', 'kick', false);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // kick(auto:false) -> beta auto-replies once -> alpha sees auto:true and
+    // stays silent. The exchange terminates instead of looping.
+    expect(betaAutoReplies).toBe(1);
+    expect(alphaAutoReplies).toBe(0);
+  }, 20000);
+
   describe('lifecycle', () => {
     test('stop is safe before start and idempotent', async () => {
       await expect(alpha.stop()).resolves.not.toThrow();

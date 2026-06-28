@@ -42,9 +42,13 @@ export class StorageManager {
         encrypted INTEGER NOT NULL,
         signature TEXT,
         delivered INTEGER DEFAULT 0,
-        read INTEGER DEFAULT 0
+        read INTEGER DEFAULT 0,
+        auto INTEGER DEFAULT 0
       )
     `);
+
+    // Add the `auto` column to a pre-existing messages table (idempotent).
+    await this.migrateMessagesTable();
 
     // Agents table
     await this.db.exec(`
@@ -120,6 +124,15 @@ export class StorageManager {
     // Placeholder for future column additions — nothing to migrate yet.
   }
 
+  /** Add the `auto` column to a pre-existing messages table (idempotent). */
+  private async migrateMessagesTable(): Promise<void> {
+    const cols: any[] = await this.db.all(`PRAGMA table_info(messages)`);
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('auto')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN auto INTEGER DEFAULT 0`);
+    }
+  }
+
   /** Add handshake columns to a pre-existing agents table (idempotent). */
   private async migrateAgentsTable(): Promise<void> {
     const cols: any[] = await this.db.all(`PRAGMA table_info(agents)`);
@@ -145,8 +158,8 @@ export class StorageManager {
 
     // INSERT OR IGNORE: the network can redeliver a message we've already stored.
     await this.db.run(
-      `INSERT OR IGNORE INTO messages (id, sender, recipient, type, content, timestamp, encrypted, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO messages (id, sender, recipient, type, content, timestamp, encrypted, signature, auto)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         message.id,
         message.sender,
@@ -155,7 +168,8 @@ export class StorageManager {
         JSON.stringify(message.content),
         timestamp,
         message.encrypted ? 1 : 0,
-        message.signature || null
+        message.signature || null,
+        message.auto ? 1 : 0
       ]
     );
   }
@@ -170,6 +184,7 @@ export class StorageManager {
       timestamp: new Date(row.timestamp),
       encrypted: row.encrypted === 1,
       signature: row.signature || undefined,
+      auto: row.auto === 1,
     };
   }
 
@@ -209,16 +224,7 @@ export class StorageManager {
       `SELECT * FROM messages WHERE read = 0 ORDER BY timestamp ASC`
     );
 
-    return rows.map((row: any) => ({
-      id: row.id,
-      sender: row.sender,
-      recipient: row.recipient,
-      type: row.type as any,
-      content: JSON.parse(row.content),
-      timestamp: new Date(row.timestamp),
-      encrypted: row.encrypted === 1,
-      signature: row.signature || undefined,
-    }));
+    return rows.map((row: any) => this.rowToMessage(row));
   }
 
   async markMessageAsRead(messageId: string): Promise<void> {
