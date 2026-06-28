@@ -43,6 +43,7 @@
   "dependencies": {
     "@chainsafe/libp2p-gossipsub": "^14.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@waku/discovery": "^0.0.13",
     "@waku/relay": "^0.0.23",
     "@waku/sdk": "^0.0.36",
     "blessed": "^0.1.81",

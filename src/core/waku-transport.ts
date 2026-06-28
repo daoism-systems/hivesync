@@ -93,6 +93,63 @@ async function loadOrCreatePeerKey(path?: string): Promise<any | undefined> {
   return key;
 }
 
+/**
+ * Resolve the public Waku fleet's enrTree to dialable WSS multiaddrs using the
+ * *system* DNS resolver (node:dns), bypassing the SDK's default DNS-over-HTTPS
+ * discovery path.
+ *
+ * The SDK discovers fleet nodes by resolving enrTree TXT records over DoH
+ * (cloudflare-dns.com / dns.google). Some networks — CI sandboxes, restrictive
+ * corporate egress, anything spawned without open outbound HTTPS — block those
+ * DoH endpoints while plain system DNS still resolves the very same records. In
+ * that case defaultBootstrap finds 0 peers and every LightPush reports
+ * "delivered to 0 peers". Resolving the same enrTree over the OS resolver and
+ * pinning the results as static bootstrap peers sidesteps the block.
+ *
+ * Returns [] on any failure (no records, library shape change, timeout) so the
+ * caller can fall back to the SDK's built-in discovery unchanged.
+ */
+async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Promise<string[]> {
+  const collect = async (): Promise<string[]> => {
+    const dns = await import('dns/promises');
+    // @waku/discovery is ESM-only (no `require` export). tsc would downlevel a
+    // bare `import()` to require() under module:commonjs and break it, so force
+    // a native dynamic import via Function — same trick as loadSdk() above.
+    const { DnsNodeDiscovery, enrTree } = (await new Function(
+      'return import("@waku/discovery")'
+    )()) as typeof import('@waku/discovery');
+    // DnsNodeDiscovery only needs a client exposing resolveTXT(domain) => string[].
+    const sysResolver = {
+      resolveTXT: async (domain: string): Promise<string[]> => {
+        const recs = await dns.resolveTxt(domain);
+        return recs.map((chunks) => chunks.join(''));
+      },
+    };
+    const disco = new (DnsNodeDiscovery as any)(sysResolver);
+    const trees = [enrTree.SANDBOX, enrTree.TEST];
+    const found = new Set<string>();
+    for await (const peer of disco.getNextPeer(trees)) {
+      let mas: string[] = [];
+      try {
+        mas = ((peer as any).peerInfo?.multiaddrs ?? []).map((m: any) => m.toString());
+      } catch {
+        /* malformed ENR — skip */
+      }
+      // Light nodes dial out over websockets, so we only want ws/wss addrs.
+      for (const ma of mas) if (/\/wss?(\/|$)/.test(ma)) found.add(ma);
+      if (found.size >= maxPeers) break;
+    }
+    return [...found];
+  };
+  // Cap total time so a hung/slow resolver can't stall node startup.
+  const collected = collect().catch((e) => {
+    logger.debug('system-DNS bootstrap resolution failed:', e);
+    return [] as string[];
+  });
+  const timed = new Promise<string[]>((res) => setTimeout(() => res([]), timeoutMs));
+  return Promise.race([collected, timed]);
+}
+
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
 /**
@@ -287,6 +344,23 @@ export class WakuTransport implements Transport {
     const useDefaultBootstrap =
       !this.config.bootstrapNodes || this.config.bootstrapNodes.length === 0;
 
+    // Static bootstrap seeds. If the operator pinned bootstrapNodes, use exactly
+    // those. Otherwise proactively resolve the public fleet's enrTree over the
+    // SYSTEM resolver and pin the results — keeps the node connectable where the
+    // SDK's DNS-over-HTTPS discovery is blocked but plain DNS still works. This
+    // is additive: defaultBootstrap (DoH + peer-exchange + peer-cache) still runs
+    // below, so healthy networks are unaffected; the seeds are a fallback path.
+    let bootstrapPeers = this.config.bootstrapNodes;
+    if (useDefaultBootstrap) {
+      const sysPeers = await resolveBootstrapViaSystemDns();
+      if (sysPeers.length) {
+        logger.info(
+          `Pinned ${sysPeers.length} fleet bootstrap peer(s) via system DNS (DoH-independent)`
+        );
+        bootstrapPeers = sysPeers;
+      }
+    }
+
     // A light node connects OUT to the public fleet; it does not need to listen
     // for inbound dials. defaultBootstrap discovers The Waku Network service
     // nodes via DNS discovery + the static bootstrap list.
@@ -302,7 +376,7 @@ export class WakuTransport implements Transport {
     const peerKey = await loadOrCreatePeerKey(this.config.peerKeyPath);
     this.node = await createLightNode({
       defaultBootstrap: useDefaultBootstrap,
-      bootstrapPeers: useDefaultBootstrap ? undefined : this.config.bootstrapNodes,
+      bootstrapPeers: bootstrapPeers && bootstrapPeers.length ? bootstrapPeers : undefined,
       networkConfig,
       numPeersToUse: this.config.lightPushPeers ?? 3,
       ...(peerKey ? { libp2p: { privateKey: peerKey } } : {}),
