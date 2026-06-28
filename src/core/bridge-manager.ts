@@ -233,6 +233,7 @@ export class BridgeManager extends EventEmitter {
             type: message.type,
             content: { text },
             encrypted: message.recipient !== 'broadcast',
+            auto: message.auto ?? false,
           });
           await this.storage.markDelivered(message.id);
           logger.info(`Outbox: delivered message ${message.id} to ${message.recipient}`);

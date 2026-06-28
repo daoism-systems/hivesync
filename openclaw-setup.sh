@@ -64,6 +64,24 @@ info "npm run build..."
 npm run build 2>/dev/null
 ok "Build complete — dist/cli.js ready"
 
+# ── 4. Generate credentials ─────────────────────────────────────────────────
+header "Generating credentials"
+
+PASSWORD=$(node -e "
+  const c = require('crypto');
+  let s = '';
+  while (s.length < 32) s += c.randomBytes(32).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
+  process.stdout.write(s.slice(0, 32));
+")
+SCRYPT_SALT=$(node -e "const c=require('crypto');process.stdout.write(c.randomBytes(16).toString('base64'))")
+SCRYPT_HASH=$(node -e "
+  const c=require('crypto');
+  const p=Buffer.from('${PASSWORD}','utf-8');
+  const s=Buffer.from('${SCRYPT_SALT}','base64');
+  process.stdout.write(c.scryptSync(p,s,32).toString('base64'));
+")
+ok "Password generated + scrypt hash computed"
+
 # ── 5. Write HiveSync daemon config ──────────────────────────────────────────
 header "Writing HiveSync daemon config"
 
@@ -85,6 +103,11 @@ agentId: ${AGENT_ID}
 agentName: "${AGENT_NAME}"
 storagePath: ${REPO_DIR}/data/hivesync.db
 syncInterval: 30
+
+auth:
+  salt: "${SCRYPT_SALT}"
+  hash: "${SCRYPT_HASH}"
+  autoReply: "✓ received"
 
 waku:
   listenAddresses:
@@ -234,13 +257,27 @@ ok "Systemd services configured"
 # Enable linger so user services start at boot
 loginctl enable-linger "$(whoami)" 2>/dev/null || true
 
-# ── 10. Done ─────────────────────────────────────────────────────────────────
+# ── 10. Health check ────────────────────────────────────────────────────────
+header "Health check"
+
+if systemctl --user is-active hivesync.service &>/dev/null; then
+  ok "HiveSync daemon is running"
+  # Check daemon can reach peers
+  cd "$REPO_DIR"
+  STATUS=$(timeout 15 node dist/cli.js status 2>/dev/null)
+  echo "$STATUS" | grep -i "connected\|peer" | head -3
+else
+  warn "Daemon not running yet — start manually: systemctl --user start hivesync.service"
+fi
+
+# ── 11. Done ─────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BOLD}${GREEN}  HiveSync + OpenClaw setup complete!${NC}"
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${BOLD}Agent ID :${NC}  ${AGENT_ID}"
+echo -e "  ${BOLD}Password :${NC}  ${PASSWORD}"
 echo -e "  ${BOLD}Config   :${NC}  ${CONFIG_FILE}"
 echo ""
 echo -e "  ${CYAN}Trust model (handshake approval):${NC}"
