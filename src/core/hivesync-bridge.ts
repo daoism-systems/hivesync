@@ -22,6 +22,13 @@ const ENVELOPE_VERSION = 1;
 const BROADCAST = 'broadcast';
 const MAX_SEEN_IDS = 5000;
 
+// Receive-side rate cap defaults: accept at most RATE_LIMIT_MAX actionable
+// messages from one sender per RATE_LIMIT_WINDOW_MS. Generous enough that
+// healthy agents (Claw's 2s outbox = ≤30/min) never trip it; tight enough to
+// shed a runaway/looping/injected flood. Overridable via BridgeConfig.
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 30;
+
 /** Our advertised protocol version and capabilities, sent in handshakes. */
 const AGENT_VERSION = '2.0.0';
 const AGENT_CAPABILITIES = ['text', 'file', 'command', 'sync', 'obsidian'];
@@ -75,6 +82,8 @@ export class HiveSync {
   private readonly knownAgents = new Map<string, KnownAgent>();
   private readonly seenIds = new Set<string>();
   private readonly seenOrder: string[] = [];
+  /** Per-sender inbound timestamps (ms) for the receive-side rate cap. */
+  private readonly inboundTimes = new Map<string, number[]>();
 
   private announceTimer: NodeJS.Timeout | null = null;
   private earlyAnnounceTimer: NodeJS.Timeout | null = null;
@@ -300,6 +309,23 @@ export class HiveSync {
 
     // Routing: only process messages addressed to us or broadcast.
     if (envelope.to !== this.identity.agentId && envelope.to !== BROADCAST) {
+      return;
+    }
+
+    // Receive-side rate cap (circuit breaker): shed directed actionable traffic
+    // from a sender that floods us — a buggy/looping/injected peer — before it
+    // can storm the mesh. ACK/ANNOUNCE/handshake are protocol and flow freely;
+    // broadcasts aren't capped (they're not addressed to us). We reply with a
+    // `rate_limited` ACK so the sender learns to back off.
+    if (
+      envelope.to === this.identity.agentId &&
+      (envelope.type === MessageType.TEXT || envelope.type === MessageType.COMMAND) &&
+      this.isRateLimited(envelope.from)
+    ) {
+      logger.warn(`Rate cap: shedding ${envelope.type} ${envelope.id} from ${envelope.from}`);
+      await this.sendAck(envelope.id, envelope.from, 'rate_limited').catch((e) =>
+        logger.debug('Failed to send rate_limited ACK:', e)
+      );
       return;
     }
 
@@ -594,6 +620,23 @@ export class HiveSync {
       content,
       encrypted: false,
     });
+  }
+
+  /**
+   * Per-sender sliding-window rate cap. Returns true once `sender` has exceeded
+   * the configured limit within the window — the caller then sheds the message.
+   * Shed messages still count toward the window, so a flooding sender stays
+   * capped until it actually backs off.
+   */
+  private isRateLimited(sender: string): boolean {
+    const max = this.config.rateLimitPerWindow ?? RATE_LIMIT_MAX;
+    if (max <= 0) return false; // cap disabled
+    const windowMs = this.config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
+    const now = Date.now();
+    const times = (this.inboundTimes.get(sender) ?? []).filter((t) => now - t < windowMs);
+    times.push(now);
+    this.inboundTimes.set(sender, times);
+    return times.length > max;
   }
 
   private rememberId(id: string): void {

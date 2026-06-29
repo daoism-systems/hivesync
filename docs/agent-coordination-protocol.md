@@ -34,8 +34,9 @@ The loop guard must live at the **protocol** layer so it holds no matter what br
 
 - ❌ **`auto` loop-prevention flag** — does not exist anywhere (no dormant constant). The one genuinely-new primitive.
 - ❌ **ACK not surfaced** to the sending agent (sent on the wire, dropped at the MCP boundary).
-- ❌ **ACK status / backpressure** — no `processed|queued|deferred|rejected`.
-- ❌ **Receive-side rate cap** (circuit breaker) and **per-pair cooldown**.
+- ✅ **ACK status / backpressure** — `queued|processed|deferred|rejected|rate_limited` + `senderStatus`, surfaced on the `ack` event. (shipped)
+- ✅ **Receive-side rate cap** (circuit breaker) — per-sender sliding window in the bridge; sheds floods with a `rate_limited` ACK. Config: `rateLimitPerWindow` (default 30), `rateLimitWindowMs` (default 60000). (shipped)
+- ❌ **Per-pair cooldown** — agent-side autoreply policy (the bridge has no autoreply to cool down); left to each driver.
 
 ## The spec
 

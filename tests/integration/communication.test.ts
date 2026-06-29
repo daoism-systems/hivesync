@@ -219,6 +219,43 @@ describe('BridgeManager communication (in-memory transport)', () => {
     expect(alphaAutoReplies).toBe(0);
   }, 20000);
 
+  test('receive-side rate cap sheds a flooding sender with a rate_limited ACK', async () => {
+    // Isolated topic + a low cap on the receiver so we don't need 30+ sends.
+    const RC_TOPIC = '/hivesync-test/1/ratecap/proto';
+    const flooderCfg = makeConfig('rc-alpha', 'RC Alpha');
+    flooderCfg.waku.contentTopic = RC_TOPIC;
+    const cappedCfg = makeConfig('rc-beta', 'RC Beta');
+    cappedCfg.waku.contentTopic = RC_TOPIC;
+    cappedCfg.rateLimitPerWindow = 3;
+    cappedCfg.rateLimitWindowMs = 60000;
+    const flooder = new BridgeManager(flooderCfg, new InMemoryTransport(RC_TOPIC, 'rc-alpha'));
+    const capped = new BridgeManager(cappedCfg, new InMemoryTransport(RC_TOPIC, 'rc-beta'));
+
+    try {
+      await flooder.start();
+      await capped.start();
+      await establishTrust(flooder, capped, 'rc-alpha', 'rc-beta');
+
+      let rateLimitedAcks = 0;
+      flooder.on('ack', (r: { status?: string }) => {
+        if (r.status === 'rate_limited') rateLimitedAcks += 1;
+      });
+
+      for (let i = 0; i < 6; i++) await flooder.sendTextMessage('rc-beta', `flood ${i}`);
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // cap = 3 → at most 3 of the 6 land; the rest are shed before storage.
+      const delivered = (await capped.getConversation('rc-alpha')).filter((m) =>
+        /^flood /.test(m.content.text)
+      );
+      expect(delivered.length).toBeLessThanOrEqual(3);
+      expect(rateLimitedAcks).toBeGreaterThanOrEqual(1);
+    } finally {
+      await flooder.stop();
+      await capped.stop();
+    }
+  }, 25000);
+
   describe('lifecycle', () => {
     test('stop is safe before start and idempotent', async () => {
       await expect(alpha.stop()).resolves.not.toThrow();
