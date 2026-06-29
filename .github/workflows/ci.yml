@@ -57,7 +57,10 @@ jobs:
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage/lcov.info
-        fail_ci_if_error: true
+        # Coverage upload is informational; don't fail the build on a Codecov
+        # outage or tokenless-upload rate limit (429). Add a CODECOV_TOKEN repo
+        # secret to make uploads reliable if gating on coverage is ever wanted.
+        fail_ci_if_error: false
 
   publish:
     needs: test
