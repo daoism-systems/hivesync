@@ -150,6 +150,48 @@ async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Pro
   return Promise.race([collected, timed]);
 }
 
+/**
+ * Load previously cached service-node multiaddrs (peers that proved useful in a
+ * past run). Returns [] if the file is missing or unreadable — the cache is a
+ * best-effort accelerator, never a hard dependency.
+ */
+export function loadPeerCache(cachePath?: string): string[] {
+  if (!cachePath) return [];
+  try {
+    const fs = require('fs') as typeof import('fs');
+    if (!fs.existsSync(cachePath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+    if (!Array.isArray(parsed)) return [];
+    // Only keep dialable ws/wss multiaddrs that carry a /p2p/ id.
+    return parsed.filter(
+      (m: unknown): m is string =>
+        typeof m === 'string' && /\/wss?(\/|$)/.test(m) && m.includes('/p2p/')
+    );
+  } catch (e) {
+    logger.debug('peer cache read failed:', e);
+    return [];
+  }
+}
+
+/**
+ * Persist up to `max` proven service-node multiaddrs, most-recent first. Writes
+ * atomically-ish (best effort) and never throws — a failed cache write must not
+ * disrupt messaging.
+ */
+export function savePeerCache(cachePath: string | undefined, addrs: string[], max: number): void {
+  if (!cachePath || addrs.length === 0) return;
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const deduped = [...new Set(addrs)].slice(0, max);
+    const dir = path.dirname(cachePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify(deduped, null, 2), { mode: 0o600 });
+  } catch (e) {
+    logger.debug('peer cache write failed:', e);
+  }
+}
+
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
 /**
@@ -186,6 +228,7 @@ export class WakuTransport implements Transport {
   private storePollTimer: NodeJS.Timeout | null = null;
   private filterHealthTimer: NodeJS.Timeout | null = null;
   private redialTimer: NodeJS.Timeout | null = null;
+  private peerCacheTimer: NodeJS.Timeout | null = null;
   private lastStoreQueryTime: Date | null = null;
   private storePolling = false;
   private relayUnsub: (() => void) | null = null;
@@ -359,6 +402,15 @@ export class WakuTransport implements Transport {
         );
         bootstrapPeers = sysPeers;
       }
+      // Re-seed peers that proved useful in a past run. On hosts where discovery
+      // is flaky this is often the difference between landing on a working peer
+      // set and timing out at 0 peers. Additive to the enrTree seeds above.
+      const cached = loadPeerCache(this.config.peerCachePath);
+      if (cached.length) {
+        const merged = new Set([...(bootstrapPeers ?? []), ...cached]);
+        bootstrapPeers = [...merged];
+        logger.info(`Re-seeded ${cached.length} proven peer(s) from cache`);
+      }
     }
 
     // A light node connects OUT to the public fleet; it does not need to listen
@@ -420,6 +472,38 @@ export class WakuTransport implements Transport {
     logger.info(
       `Protocols — LightPush: ${!!this.node.lightPush}, Filter: ${!!this.node.filter}, Store: ${!!this.node.store}`
     );
+
+    this.startPeerCachePersistence();
+  }
+
+  /**
+   * Periodically snapshot the dialable multiaddrs of currently-connected service
+   * nodes and persist them, so a later start can re-seed a known-good peer set
+   * instead of relying solely on (flaky) discovery. Best-effort, never throws.
+   */
+  private startPeerCachePersistence(): void {
+    if (!this.config.peerCachePath) return;
+    const max = this.config.peerCacheSize ?? 20;
+    const snapshot = () => {
+      if (!this.started) return;
+      try {
+        const conns = (this.node?.libp2p.getConnections?.() ?? []) as any[];
+        const addrs: string[] = [];
+        for (const c of conns) {
+          const ma = c?.remoteAddr?.toString?.();
+          if (!ma || !/\/wss?(\/|$)/.test(ma)) continue; // light nodes dial ws/wss only
+          const peerId = c?.remotePeer?.toString?.();
+          addrs.push(ma.includes('/p2p/') || !peerId ? ma : `${ma}/p2p/${peerId}`);
+        }
+        if (addrs.length) savePeerCache(this.config.peerCachePath, addrs, max);
+      } catch (e) {
+        logger.debug('peer cache snapshot failed:', e);
+      }
+    };
+    // One snapshot soon after connect, then refresh on an interval.
+    setTimeout(snapshot, 10000).unref?.();
+    this.peerCacheTimer = setInterval(snapshot, 60000);
+    this.peerCacheTimer.unref?.();
   }
 
   async subscribe(handler: RawMessageHandler): Promise<void> {
@@ -660,6 +744,10 @@ export class WakuTransport implements Transport {
     if (this.redialTimer) {
       clearInterval(this.redialTimer);
       this.redialTimer = null;
+    }
+    if (this.peerCacheTimer) {
+      clearInterval(this.peerCacheTimer);
+      this.peerCacheTimer = null;
     }
     if (this.relayUnsub) {
       try {

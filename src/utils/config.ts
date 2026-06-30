@@ -119,6 +119,10 @@ function ensureStableIdentity(config: BridgeConfig, agentIdExplicit: boolean): B
     config.waku.peerKeyPath = path.join(storageDir, 'peer.key');
   }
 
+  if (!config.waku.peerCachePath) {
+    config.waku.peerCachePath = path.join(storageDir, 'known-peers.json');
+  }
+
   return config;
 }
 
