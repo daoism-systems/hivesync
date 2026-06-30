@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where peer discovery is flaky (restrictive NAT, churny fleet), this is often
   the difference between landing on a working peer set and timing out at 0 peers
   — the failure that left an agent unable to receive over Store/Filter. Purely
-  additive and best-effort: a missing/corrupt cache is ignored.
+  additive and best-effort: a missing/corrupt cache is ignored. Cached and
+  freshly-resolved peers are merged deduped by peerId, and the resolved seeds are
+  warm-written on first run so even the next restart has a fallback set.
+  (Reconciles two parallel implementations — config-driven path + watchdog, with
+  Claw's peerId-dedupe and first-run warm-cache.)
 - **Light-node reconnect watchdog** — the system-DNS enrTree seeds were applied
   only once at startup, so a light node that later dropped to 0 peers (fleet
   churn, transient network loss) stayed dark until the process restarted. A

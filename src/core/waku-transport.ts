@@ -192,6 +192,28 @@ export function savePeerCache(cachePath: string | undefined, addrs: string[], ma
   }
 }
 
+/** The peerId of a multiaddr (the part after `/p2p/`), or the whole string. */
+function peerIdOf(multiaddr: string): string {
+  return multiaddr.split('/p2p/')[1] || multiaddr;
+}
+
+/**
+ * Merge two multiaddr lists, `primary` first, dropping any `extra` entry whose
+ * peerId already appears in `primary` (the same node reached via a second
+ * address is redundant for bootstrap).
+ */
+export function mergeByPeerId(primary: string[], extra: string[]): string[] {
+  const seen = new Set(primary.map(peerIdOf));
+  const merged = [...primary];
+  for (const addr of extra) {
+    if (!seen.has(peerIdOf(addr))) {
+      seen.add(peerIdOf(addr));
+      merged.push(addr);
+    }
+  }
+  return merged;
+}
+
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
 /**
@@ -404,12 +426,19 @@ export class WakuTransport implements Transport {
       }
       // Re-seed peers that proved useful in a past run. On hosts where discovery
       // is flaky this is often the difference between landing on a working peer
-      // set and timing out at 0 peers. Additive to the enrTree seeds above.
+      // set and timing out at 0 peers. Cached peers come first (known-good), then
+      // any fresh enrTree seeds, deduped by peerId so the same node via two
+      // addresses isn't dialed twice.
       const cached = loadPeerCache(this.config.peerCachePath);
       if (cached.length) {
-        const merged = new Set([...(bootstrapPeers ?? []), ...cached]);
-        bootstrapPeers = [...merged];
+        bootstrapPeers = mergeByPeerId(cached, bootstrapPeers ?? []);
         logger.info(`Re-seeded ${cached.length} proven peer(s) from cache`);
+      }
+      // First-run warm cache: persist the resolved enrTree seeds right away so
+      // even the very next restart has a known-dialable fallback set, before the
+      // periodic snapshot has had a chance to run.
+      if (!cached.length && bootstrapPeers && bootstrapPeers.length) {
+        savePeerCache(this.config.peerCachePath, bootstrapPeers, this.config.peerCacheSize ?? 20);
       }
     }
 

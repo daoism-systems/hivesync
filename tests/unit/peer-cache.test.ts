@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadPeerCache, savePeerCache } from '../../src/core/waku-transport';
+import { loadPeerCache, savePeerCache, mergeByPeerId } from '../../src/core/waku-transport';
 
 const WS = '/ip4/1.2.3.4/tcp/443/wss/p2p/16Uiu2HAmExample';
 const WS2 = '/ip4/5.6.7.8/tcp/8000/ws/p2p/16Uiu2HAmOther';
@@ -48,5 +48,24 @@ describe('peer cache', () => {
   test('corrupt JSON loads as empty', () => {
     fs.writeFileSync(file, '{ not json', 'utf-8');
     expect(loadPeerCache(file)).toEqual([]);
+  });
+});
+
+describe('mergeByPeerId', () => {
+  const A = '/ip4/1.1.1.1/tcp/443/wss/p2p/16Uiu2HAmAAA';
+  const A2 = '/ip4/9.9.9.9/tcp/8000/ws/p2p/16Uiu2HAmAAA'; // same peerId as A, diff addr
+  const B = '/ip4/2.2.2.2/tcp/443/wss/p2p/16Uiu2HAmBBB';
+
+  test('keeps primary first and appends only new peerIds', () => {
+    expect(mergeByPeerId([A], [B])).toEqual([A, B]);
+  });
+
+  test('drops an extra whose peerId already appears in primary', () => {
+    // A2 is the same node as A via a different address → redundant.
+    expect(mergeByPeerId([A], [A2, B])).toEqual([A, B]);
+  });
+
+  test('dedupes within the extra list too', () => {
+    expect(mergeByPeerId([], [B, B])).toEqual([B]);
   });
 });
