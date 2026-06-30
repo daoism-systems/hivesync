@@ -150,6 +150,45 @@ async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Pro
   return Promise.race([collected, timed]);
 }
 
+// ── Peer cache ───────────────────────────────────────────────────────────
+// Persist successful peer multiaddrs so we skip broken DNS discovery on restart.
+
+const PEER_CACHE_PATH = require('path').join(
+  require('os').homedir(),
+  '.openclaw', 'workspace', 'hivesync', 'data', 'peer-cache.json'
+);
+
+function loadPeerCache(): string[] {
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(PEER_CACHE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(PEER_CACHE_PATH, 'utf8'));
+      if (Array.isArray(data.peers) && data.peers.length) {
+        logger.info(`Loaded ${data.peers.length} cached peer(s) from ${PEER_CACHE_PATH}`);
+        return data.peers;
+      }
+    }
+  } catch (e: any) {
+    logger.debug('Peer cache load failed:', e.message);
+  }
+  return [];
+}
+
+function savePeerCache(peers: string[]): void {
+  try {
+    const fs = require('fs');
+    const dir = require('path').dirname(PEER_CACHE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      PEER_CACHE_PATH,
+      JSON.stringify({ peers, updated: new Date().toISOString() }, null, 2)
+    );
+    logger.debug(`Saved ${peers.length} peer(s) to peer cache`);
+  } catch (e: any) {
+    logger.debug('Peer cache save failed:', e.message);
+  }
+}
+
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
 /**
@@ -186,6 +225,7 @@ export class WakuTransport implements Transport {
   private storePollTimer: NodeJS.Timeout | null = null;
   private filterHealthTimer: NodeJS.Timeout | null = null;
   private redialTimer: NodeJS.Timeout | null = null;
+  private peerCacheTimer: NodeJS.Timeout | null = null;
   private lastStoreQueryTime: Date | null = null;
   private storePolling = false;
   private relayUnsub: (() => void) | null = null;
@@ -351,13 +391,41 @@ export class WakuTransport implements Transport {
     // is additive: defaultBootstrap (DoH + peer-exchange + peer-cache) still runs
     // below, so healthy networks are unaffected; the seeds are a fallback path.
     let bootstrapPeers = this.config.bootstrapNodes;
+    // Merge: system DNS + peer cache. Cached peers often have a proven history
+    // of accepting LightPush/Store, giving us a fallback when fleet nodes are
+    // flaky or overloaded.
+    let sysPeers: string[] = [];
     if (useDefaultBootstrap) {
-      const sysPeers = await resolveBootstrapViaSystemDns();
+      sysPeers = await resolveBootstrapViaSystemDns();
       if (sysPeers.length) {
         logger.info(
           `Pinned ${sysPeers.length} fleet bootstrap peer(s) via system DNS (DoH-independent)`
         );
-        bootstrapPeers = sysPeers;
+      }
+    }
+    const cachedPeers = loadPeerCache();
+    if (cachedPeers.length) {
+      // Deduplicate: prefer cached peers (known-good), then append DNS peers.
+      const seen = new Set(cachedPeers.map(p => p.split('/p2p/')[1] || p));
+      const merged = [...cachedPeers];
+      for (const p of sysPeers) {
+        const pid = p.split('/p2p/')[1] || p;
+        if (!seen.has(pid)) merged.push(p);
+      }
+      bootstrapPeers = merged;
+      logger.info(
+        `Bootstrap: ${merged.length} peer(s) (${cachedPeers.length} cached + ` +
+        `${sysPeers.length - (merged.length - cachedPeers.length)} DNS)`
+      );
+    } else {
+      bootstrapPeers = sysPeers;
+    }
+    // Warm the peer cache with whatever bootstrap peers we resolved — these
+    // are known-dialable addresses that worked on this host.
+    if (bootstrapPeers && bootstrapPeers.length) {
+      const existing = loadPeerCache();
+      if (existing.length === 0 || bootstrapPeers.length > existing.length) {
+        savePeerCache(bootstrapPeers);
       }
     }
 
@@ -420,6 +488,32 @@ export class WakuTransport implements Transport {
     logger.info(
       `Protocols — LightPush: ${!!this.node.lightPush}, Filter: ${!!this.node.filter}, Store: ${!!this.node.store}`
     );
+
+    // Peer cache: scrape connected peers' multiaddrs and persist them.
+    await this.scrapeAndCachePeers();
+    // Re-scrape every 60s to catch peers that connect after startup.
+    this.peerCacheTimer = setInterval(() => void this.scrapeAndCachePeers(), 60000);
+    this.peerCacheTimer.unref?.();
+  }
+
+  /** Scrape libp2p peer multiaddrs and write to the peer cache. */
+  private async scrapeAndCachePeers(): Promise<void> {
+    try {
+      const connected = await this.node!.libp2p.getPeers();
+      const mas: string[] = [];
+      for (const p of connected) {
+        const addrs: string[] = (p.addrs as any[])?.map((a: any) => a.toString()) ?? [];
+        for (const a of addrs) {
+          if (/\/wss?(\/|$)/.test(a)) mas.push(a);
+        }
+      }
+      if (mas.length) {
+        savePeerCache(mas);
+        logger.info(`Cached ${mas.length} connected peer multiaddr(s) for next startup`);
+      }
+    } catch (e: any) {
+      logger.debug('Peer cache scrape skipped:', e.message);
+    }
   }
 
   async subscribe(handler: RawMessageHandler): Promise<void> {
@@ -649,6 +743,14 @@ export class WakuTransport implements Transport {
   }
 
   async stop(): Promise<void> {
+    if (this.peerCacheTimer) {
+      clearInterval(this.peerCacheTimer);
+      this.peerCacheTimer = null;
+    }
+    // Final cache scrape before shutdown.
+    if (this.node) {
+      try { await this.scrapeAndCachePeers(); } catch { /* ignore */ }
+    }
     if (this.storePollTimer) {
       clearInterval(this.storePollTimer);
       this.storePollTimer = null;
