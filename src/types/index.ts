@@ -214,6 +214,17 @@ export interface WakuConfig {
    */
   peerKeyPath?: string;
   /**
+   * Path to a JSON cache of runtime-proven service-node multiaddrs (peers that
+   * actually accepted a LightPush or answered a Store query). On startup these
+   * are re-seeded as bootstrapPeers alongside the enrTree seeds, so a host whose
+   * peer discovery is flaky (e.g. behind a restrictive NAT) still has known-good
+   * peers to dial instead of landing on 0 peers. Defaults to
+   * `<storageDir>/known-peers.json`; the cache is written as peers prove useful.
+   */
+  peerCachePath?: string;
+  /** Max number of proven peers to keep in the cache file. Defaults to 20. */
+  peerCacheSize?: number;
+  /**
    * How many LightPush service nodes to send each message to in parallel.
    * The SDK default is 1, which fails entirely if that one peer can't relay
    * (status 505 NO_PEERS) or its stream is reset. Defaults to 3 here. Raise it
