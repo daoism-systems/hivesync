@@ -474,6 +474,49 @@ export class WakuTransport implements Transport {
     );
 
     this.startPeerCachePersistence();
+    this.startReconnectWatchdog();
+  }
+
+  /**
+   * Light-mode connectivity watchdog. A light node leans on the public fleet,
+   * and the system-DNS enrTree seeds are applied only ONCE at startup. If the
+   * node later drops to 0 peers (fleet churn, a transient network blip), nothing
+   * re-seeds it — it stays dark until the process restarts. This periodically
+   * checks the peer count and, when it hits 0, re-dials the proven peer cache
+   * plus freshly re-resolved enrTree seeds. Live recovery, no restart needed.
+   */
+  private startReconnectWatchdog(): void {
+    this.redialTimer = setInterval(() => void this.reseedIfIsolated(), 20000);
+    this.redialTimer.unref?.();
+  }
+
+  private async reseedIfIsolated(): Promise<void> {
+    if (!this.started || !this.node) return;
+    let count = 0;
+    try {
+      count = (await this.node.libp2p.getPeers()).length;
+    } catch {
+      return;
+    }
+    if (count > 0) return; // at least one peer — the SDK's peer manager tops up the rest
+
+    logger.warn('Light node at 0 peers — re-seeding from peer cache + enrTree');
+    const candidates = new Set<string>(loadPeerCache(this.config.peerCachePath));
+    const fresh = await resolveBootstrapViaSystemDns().catch(() => [] as string[]);
+    for (const a of fresh) candidates.add(a);
+    if (!candidates.size) return;
+
+    const ma = await loadMultiaddr();
+    let dialed = 0;
+    for (const addr of candidates) {
+      try {
+        await this.node.libp2p.dial(ma.multiaddr(addr));
+        dialed++;
+      } catch (e) {
+        logger.debug(`re-seed dial failed for ${addr}: ${(e as Error).message}`);
+      }
+    }
+    if (dialed) logger.info(`Re-seed dialed ${dialed} peer(s) after 0-peer drop`);
   }
 
   /**

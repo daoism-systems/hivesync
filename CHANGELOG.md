@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the difference between landing on a working peer set and timing out at 0 peers
   — the failure that left an agent unable to receive over Store/Filter. Purely
   additive and best-effort: a missing/corrupt cache is ignored.
+- **Light-node reconnect watchdog** — the system-DNS enrTree seeds were applied
+  only once at startup, so a light node that later dropped to 0 peers (fleet
+  churn, transient network loss) stayed dark until the process restarted. A
+  watchdog now checks the peer count every 20s and, when it hits 0, re-dials the
+  proven peer cache plus freshly re-resolved enrTree seeds — live recovery with
+  no restart.
 
 ### Fixed
 - **Stable agent identity across restarts** — when no `agentId` is pinned (no
