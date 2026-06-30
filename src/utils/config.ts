@@ -37,7 +37,7 @@ export async function loadConfig(configPath?: string): Promise<BridgeConfig> {
       try {
         const content = fs.readFileSync(tryPath, 'utf-8');
         const config = yaml.parse(content) as BridgeConfig;
-        
+
         // Merge with defaults
         const mergedConfig = {
           ...DEFAULT_CONFIG,
@@ -47,9 +47,11 @@ export async function loadConfig(configPath?: string): Promise<BridgeConfig> {
             ...config.waku,
           },
         };
-        
+
         logger.info(`Loaded configuration from: ${tryPath}`);
-        return mergedConfig;
+        // agentId is explicit only if the file actually pinned a non-empty one.
+        const explicit = typeof config?.agentId === 'string' && config.agentId.trim() !== '';
+        return ensureStableIdentity(mergedConfig, explicit);
       } catch (error) {
         logger.warn(`Failed to load config from ${tryPath}:`, error);
       }
@@ -58,22 +60,66 @@ export async function loadConfig(configPath?: string): Promise<BridgeConfig> {
 
   // Try environment variables
   const envConfig: Partial<BridgeConfig> = {};
-  
+
   if (process.env.AGENT_ID) envConfig.agentId = process.env.AGENT_ID;
   if (process.env.AGENT_NAME) envConfig.agentName = process.env.AGENT_NAME;
   if (process.env.STORAGE_PATH) envConfig.storagePath = process.env.STORAGE_PATH;
   if (process.env.SYNC_INTERVAL) envConfig.syncInterval = parseInt(process.env.SYNC_INTERVAL);
-  
+
   if (Object.keys(envConfig).length > 0) {
     logger.info('Loaded configuration from environment variables');
-    return {
-      ...DEFAULT_CONFIG,
-      ...envConfig,
-    };
+    return ensureStableIdentity(
+      { ...DEFAULT_CONFIG, ...envConfig },
+      !!process.env.AGENT_ID
+    );
   }
 
   logger.warn('No configuration file found, using defaults');
-  return DEFAULT_CONFIG;
+  return ensureStableIdentity({ ...DEFAULT_CONFIG }, false);
+}
+
+/**
+ * Pin an agent's identity so it survives restarts.
+ *
+ * When the operator doesn't pin an `agentId`, the default is a fresh random
+ * `agent-<rand>` generated every process start. That id is the file key for the
+ * agent's signing keys (`identity-<agentId>.json`), so a changing id means a new
+ * signing key — hence a new `keyId` fingerprint — on every restart. Peers TOFU-
+ * pin that keyId, so the rotation breaks their trust pin and forces a fresh
+ * handshake each time; in the meantime messages are quarantined and show up as
+ * `delivered=0`. To avoid that we persist the generated id once (under the
+ * storage dir) and reuse it on subsequent starts.
+ *
+ * We also default `waku.peerKeyPath` so the libp2p peerId is likewise stable
+ * across restarts (generated once, reloaded) — better connection reuse and a
+ * consistent presence on the fleet.
+ */
+function ensureStableIdentity(config: BridgeConfig, agentIdExplicit: boolean): BridgeConfig {
+  const storageDir = path.dirname(path.resolve(config.storagePath));
+
+  if (!agentIdExplicit) {
+    try {
+      if (!fs.existsSync(storageDir)) fs.mkdirSync(storageDir, { recursive: true });
+      const idFile = path.join(storageDir, 'agent-id');
+      if (fs.existsSync(idFile)) {
+        const saved = fs.readFileSync(idFile, 'utf-8').trim();
+        if (saved) config.agentId = saved;
+      } else {
+        fs.writeFileSync(idFile, config.agentId, { mode: 0o600 });
+        logger.info(
+          `Persisted auto-generated agentId "${config.agentId}" to ${idFile} (stable across restarts)`
+        );
+      }
+    } catch (error) {
+      logger.warn('Could not persist a stable agentId; identity may rotate on restart:', error);
+    }
+  }
+
+  if (!config.waku.peerKeyPath) {
+    config.waku.peerKeyPath = path.join(storageDir, 'peer.key');
+  }
+
+  return config;
 }
 
 export async function saveConfig(config: BridgeConfig, configPath?: string): Promise<void> {
