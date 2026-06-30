@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Stable agent identity across restarts** — when no `agentId` is pinned (no
+  config file / no `AGENT_ID`), the daemon used to fall back to a fresh random
+  `agent-<rand>` on every start. Because the signing keys are filed under
+  `identity-<agentId>.json`, a changing id rotated the signing key and thus the
+  `keyId` fingerprint each restart, which broke every peer's TOFU trust pin and
+  forced a re-handshake — messages from the "new" identity were quarantined and
+  reported `delivered=0`. `loadConfig` now persists the auto-generated id to
+  `<storageDir>/agent-id` and reuses it, and defaults `waku.peerKeyPath` to
+  `<storageDir>/peer.key` so the libp2p peerId is likewise stable across restarts.
+
 ### Changed
 - **Trust model: handshake approval replaces password auth** — all password-based
   access control has been removed (no access passwords, no scrypt salt/hash, no
