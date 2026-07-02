@@ -238,6 +238,15 @@ export interface WakuConfig {
    * (which surfaces as "Remote peer rejected"). Defaults to 300ms.
    */
   sendGapMs?: number;
+  /**
+   * How far back (hours) the FIRST Store poll after startup looks. Without a
+   * backfill window, a restarted node only sees messages sent after it came
+   * up — anything sent while it was down (or while its Filter/Store peers were
+   * on the wrong fleet) is silently lost even though the fleet's Store still
+   * holds it. Re-ingest is idempotent (messages INSERT OR IGNORE by id, read
+   * flags preserved). Defaults to 24.
+   */
+  storeBackfillHours?: number;
 }
 
 export interface ObsidianConfig {
