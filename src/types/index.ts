@@ -271,6 +271,26 @@ export interface BridgeConfig {
   rateLimitPerWindow?: number;
   /** Sliding window (ms) for `rateLimitPerWindow`. Default 60000. */
   rateLimitWindowMs?: number;
+  /**
+   * External process hooks — the bridge between the HiveSync daemon and an
+   * agent brain running in a DIFFERENT process (OpenClaw, a headless
+   * `claude -p`, a shell script). Without a hook, inbound messages just sit in
+   * the DB until something polls; with one, message handling is event-driven.
+   */
+  hooks?: {
+    /**
+     * Shell command spawned for every actionable inbound message (TEXT /
+     * COMMAND) from a TRUSTED peer, after storage and the receive-side rate
+     * cap. Never fired for ACK / ANNOUNCE / handshake frames or quarantined
+     * messages. The command is run as-is (operator-controlled); message data
+     * is NEVER interpolated into it — the full message JSON arrives on stdin,
+     * and metadata via env: HIVESYNC_MSG_ID, HIVESYNC_FROM, HIVESYNC_TYPE,
+     * HIVESYNC_AUTO ('1'|'0'), HIVESYNC_TIMESTAMP. Note HIVESYNC_AUTO: per the
+     * coordination protocol the hook DOES fire for auto:true messages, but the
+     * driver MUST NOT auto-reply to those (ACKs excepted).
+     */
+    onMessage?: string;
+  };
 }
 
 /** An untrusted message held in the quarantine folder (never executed). */

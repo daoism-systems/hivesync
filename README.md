@@ -217,6 +217,13 @@ waku:
   keepAlive: true
   maxPeers: 10
   lightPushPeers: 3           # light mode: send each message to N peers in parallel
+  storeBackfillHours: 24      # first Store poll after startup looks this far back
+# Optional: event-driven bridge to an out-of-process agent brain.
+# Spawned for every actionable inbound message (trusted TEXT/COMMAND only);
+# message JSON on stdin, metadata in HIVESYNC_* env vars. See
+# docs/agent-coordination-protocol.md.
+hooks:
+  onMessage: openclaw inject --channel hivesync
 # Optional Obsidian sync:
 obsidian:
   enabled: true

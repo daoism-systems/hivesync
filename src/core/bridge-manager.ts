@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import { HiveSync } from './hivesync-bridge';
 import { Identity } from './identity';
@@ -272,6 +273,7 @@ export class BridgeManager extends EventEmitter {
       await this.storage.saveMessage(message);
       this.emit('text', message);
       this.emit('message', message);
+      this.runOnMessageHook(message);
     });
 
     this.hivesync.onMessage(MessageType.COMMAND, async (message) => {
@@ -283,6 +285,7 @@ export class BridgeManager extends EventEmitter {
       }
       await this.storage.saveMessage(msg);
       this.emit('message', msg);
+      this.runOnMessageHook(msg);
       await this.handleCommand(msg);
     });
 
@@ -297,6 +300,48 @@ export class BridgeManager extends EventEmitter {
         this.emit('ack', { originalMessageId, from: message.sender, status, senderStatus });
       }
     });
+  }
+
+  /**
+   * Spawn the configured `hooks.onMessage` command for an actionable inbound
+   * message — the event-driven bridge to an out-of-process agent brain
+   * (OpenClaw event injection, a headless `claude -p`, a script). Fire and
+   * forget: the daemon never waits on, or fails because of, the hook.
+   *
+   * Security: the command string comes from the operator's own config and is
+   * executed verbatim. Message data is NEVER interpolated into it — the full
+   * message JSON is written to the child's stdin and metadata is passed via
+   * HIVESYNC_* env vars, so hostile message content cannot inject shell.
+   *
+   * The hook fires for auto:true messages too (HIVESYNC_AUTO='1') — receiving
+   * is fine; the driver on the other end must honor the protocol rule and not
+   * auto-REPLY to those (see docs/agent-coordination-protocol.md).
+   */
+  private runOnMessageHook(message: Message): void {
+    const command = this.config.hooks?.onMessage;
+    if (!command) return;
+    try {
+      const child = spawn(command, {
+        shell: true,
+        detached: true,
+        stdio: ['pipe', 'ignore', 'ignore'],
+        env: {
+          ...process.env,
+          HIVESYNC_MSG_ID: message.id,
+          HIVESYNC_FROM: message.sender,
+          HIVESYNC_TYPE: message.type,
+          HIVESYNC_AUTO: message.auto ? '1' : '0',
+          HIVESYNC_TIMESTAMP: new Date(message.timestamp).toISOString(),
+        },
+      });
+      child.on('error', (e) => logger.warn(`onMessage hook failed to spawn: ${e.message}`));
+      child.stdin?.on('error', () => undefined); // hook may exit without reading stdin
+      child.stdin?.end(JSON.stringify(message));
+      child.unref();
+      logger.debug(`onMessage hook spawned for ${message.id} from ${message.sender}`);
+    } catch (e) {
+      logger.warn(`onMessage hook error: ${(e as Error).message}`);
+    }
   }
 
   /**

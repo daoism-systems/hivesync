@@ -88,6 +88,31 @@ Extend the existing `MessageType.ACK` content:
   - **(a) Companion daemon** (mirrors OpenClaw): a long-running process watches inbound HiveSync messages and spawns a headless `claude -p` / Agent SDK session to draft + send replies. True always-on.
   - **(b) In-session poll loop** (`/loop` or scheduled wake): periodically `get_unread` → reply. Only while a session is open. Lightweight, good for supervised bursts.
 
+### The `hooks.onMessage` exec hook (shipped) — the missing daemon→brain bridge
+
+The daemon stores inbound messages in its DB and emits in-process events only —
+a brain running in a *different* process (OpenClaw, `claude -p`) never hears
+about them. `hooks.onMessage` closes that gap: the daemon spawns the configured
+shell command for every actionable inbound message (TEXT/COMMAND from a
+**trusted** peer, after storage and the rate cap — never for ACK/ANNOUNCE/
+handshake or quarantined frames).
+
+```yaml
+hooks:
+  onMessage: openclaw inject --channel hivesync   # or: claude -p "$(cat)" ...
+```
+
+Contract:
+- The command string is operator config, run verbatim. Message data is **never
+  interpolated** into it — full message JSON arrives on **stdin**; metadata via
+  env: `HIVESYNC_MSG_ID`, `HIVESYNC_FROM`, `HIVESYNC_TYPE`, `HIVESYNC_AUTO`
+  (`'1'|'0'`), `HIVESYNC_TIMESTAMP`.
+- Fire-and-forget: the daemon never blocks on or fails because of the hook.
+- The hook **does** fire for `auto:true` messages (`HIVESYNC_AUTO=1`) —
+  receiving is fine; the driver must not auto-REPLY to them (ACKs excepted).
+- This turns claw's autoreply event-driven (no DB polling) and implements
+  option (a) for vibecoder with zero extra daemon code.
+
 ## Implementation plan (canonical patch — owned in-repo)
 
 1. `src/types/index.ts` — add `auto?: boolean` (+ `priority?`) to the envelope/`Message`; add `status` + `senderStatus` to ACK content type.

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as nodePath from 'path';
 import { BridgeManager } from '../../src/core/bridge-manager';
 import { InMemoryTransport } from '../../src/core/transport';
 import { BridgeConfig, MessageType } from '../../src/types';
@@ -263,5 +266,64 @@ describe('BridgeManager communication (in-memory transport)', () => {
       await alpha.stop();
       await expect(alpha.stop()).resolves.not.toThrow();
     });
+  });
+
+  describe('hooks.onMessage', () => {
+    // The hook writes what it observed to a temp file; the test asserts on it.
+    // MESSAGE data must arrive via env + stdin — never the command line. (The
+    // out-file path below is test-controlled config, so embedding it is fine.)
+    test('spawns for trusted TEXT with metadata in env and JSON on stdin, not for ACKs', async () => {
+      const HOOK_TOPIC = '/hivesync-test/1/hook/proto';
+      const outFile = nodePath.join(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'hs-hook-')), 'hook.out');
+      const hookCmd =
+        `node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>` +
+        `require('fs').appendFileSync('${outFile}',` +
+        `JSON.stringify({from:process.env.HIVESYNC_FROM,type:process.env.HIVESYNC_TYPE,` +
+        `auto:process.env.HIVESYNC_AUTO,stdin:JSON.parse(d)})+'\\n'))"`;
+
+      const senderCfg = makeConfig('hk-alpha', 'Hook Alpha');
+      senderCfg.waku.contentTopic = HOOK_TOPIC;
+      const receiverCfg = makeConfig('hk-beta', 'Hook Beta');
+      receiverCfg.waku.contentTopic = HOOK_TOPIC;
+      receiverCfg.hooks = { onMessage: hookCmd };
+      const sender = new BridgeManager(senderCfg, new InMemoryTransport(HOOK_TOPIC, 'hk-alpha'));
+      const receiver = new BridgeManager(receiverCfg, new InMemoryTransport(HOOK_TOPIC, 'hk-beta'));
+
+      try {
+        await sender.start();
+        await receiver.start();
+        await establishTrust(sender, receiver, 'hk-alpha', 'hk-beta');
+
+        await sender.sendTextMessage('hk-beta', 'wake up, brain');
+        await sender.sendTextMessage('hk-beta', 'automated one', true);
+
+        const ran = await waitFor(() => {
+          if (!fs.existsSync(outFile)) return false;
+          return fs.readFileSync(outFile, 'utf-8').trim().split('\n').length >= 2;
+        }, 8000);
+        expect(ran).toBe(true);
+
+        const lines = fs
+          .readFileSync(outFile, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((l) => JSON.parse(l));
+        // Both actionable messages fired the hook — and nothing else did (the
+        // ACKs each send generates flow back to the SENDER, whose config has
+        // no hook; the receiver only sees the two TEXTs).
+        expect(lines).toHaveLength(2);
+        const [manual, auto] = lines;
+        expect(manual.from).toBe('hk-alpha');
+        expect(manual.type).toBe('text');
+        expect(manual.auto).toBe('0');
+        expect(manual.stdin.content.text).toBe('wake up, brain');
+        expect(auto.auto).toBe('1');
+        expect(auto.stdin.content.text).toBe('automated one');
+      } finally {
+        delete process.env.HOOK_OUT;
+        await sender.stop();
+        await receiver.stop();
+      }
+    }, 25000);
   });
 });
