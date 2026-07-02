@@ -24,6 +24,13 @@ function log(...a: unknown[]): void {
 async function main(): Promise<void> {
   const sdk = await loadSdk();
   const { createLightNode, waitForRemotePeer, Protocols } = sdk;
+  if (!bootstrap.length) {
+    log(
+      'WARNING: no HIVESYNC_BOOTSTRAP given — defaultBootstrap mixes the sandbox and\n' +
+        'test fleets, so the store query may hit a test-fleet node and report 0\n' +
+        'messages. Pin a sandbox store node for a meaningful census.'
+    );
+  }
   const node = await createLightNode({
     defaultBootstrap: bootstrap.length === 0,
     bootstrapPeers: bootstrap.length ? bootstrap : undefined,
