@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **LightPush/Store peer caching** — the light node now persists the dialable
+  multiaddrs of service nodes it actually connected to (`<storageDir>/known-peers.json`,
+  configurable via `waku.peerCachePath` / `waku.peerCacheSize`) and re-seeds them
+  as bootstrap peers on the next start, alongside the enrTree seeds. On hosts
+  where peer discovery is flaky (restrictive NAT, churny fleet), this is often
+  the difference between landing on a working peer set and timing out at 0 peers
+  — the failure that left an agent unable to receive over Store/Filter. Purely
+  additive and best-effort: a missing/corrupt cache is ignored. Cached and
+  freshly-resolved peers are merged deduped by peerId, and the resolved seeds are
+  warm-written on first run so even the next restart has a fallback set.
+  (Reconciles two parallel implementations — config-driven path + watchdog, with
+  Claw's peerId-dedupe and first-run warm-cache.)
+- **Light-node reconnect watchdog** — the system-DNS enrTree seeds were applied
+  only once at startup, so a light node that later dropped to 0 peers (fleet
+  churn, transient network loss) stayed dark until the process restarted. A
+  watchdog now checks the peer count every 20s and, when it hits 0, re-dials the
+  proven peer cache plus freshly re-resolved enrTree seeds — live recovery with
+  no restart.
+
 ### Fixed
 - **Stable agent identity across restarts** — when no `agentId` is pinned (no
   config file / no `AGENT_ID`), the daemon used to fall back to a fresh random

@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { WakuConfig } from '../types';
 import { Transport } from './transport';
 import { logger } from '../utils/logger';
@@ -94,6 +96,26 @@ async function loadOrCreatePeerKey(path?: string): Promise<any | undefined> {
 }
 
 /**
+ * Multiaddr fragments identifying nodes of fleets we must NOT peer with.
+ *
+ * The public infrastructure runs two SEPARATE fleets — sandbox
+ * (*.waku.sandbox.status.im) and test (*.waku.test.statusim.net) — and they are
+ * DISJOINT relay meshes: a message LightPushed into one is never seen by the
+ * other's Filter/Store nodes. Bootstrapping from both (which the SDK's
+ * defaultBootstrap does) splits agents across meshes at random, producing the
+ * "A sends fine, B never receives" one-way comms we kept chasing. All HiveSync
+ * traffic lives on the sandbox fleet (verified via scripts/store-census.ts:
+ * sandbox store had every agent's messages, test store had zero), so we pin
+ * every discovery path to sandbox and filter test-fleet nodes out everywhere.
+ */
+const FOREIGN_FLEET_RE = /waku\.test\.|test\.statusim\.net/;
+
+/** Keep only multiaddrs that are not on a foreign (non-sandbox) fleet. */
+function dropForeignFleet(addrs: string[]): string[] {
+  return addrs.filter((a) => !FOREIGN_FLEET_RE.test(a));
+}
+
+/**
  * Resolve the public Waku fleet's enrTree to dialable WSS multiaddrs using the
  * *system* DNS resolver (node:dns), bypassing the SDK's default DNS-over-HTTPS
  * discovery path.
@@ -126,7 +148,8 @@ async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Pro
       },
     };
     const disco = new (DnsNodeDiscovery as any)(sysResolver);
-    const trees = [enrTree.SANDBOX, enrTree.TEST];
+    // Sandbox ONLY — never mix fleets (see FOREIGN_FLEET_RE above).
+    const trees = [enrTree.SANDBOX];
     const found = new Set<string>();
     for await (const peer of disco.getNextPeer(trees)) {
       let mas: string[] = [];
@@ -150,43 +173,68 @@ async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Pro
   return Promise.race([collected, timed]);
 }
 
-// ── Peer cache ───────────────────────────────────────────────────────────
-// Persist successful peer multiaddrs so we skip broken DNS discovery on restart.
-
-const PEER_CACHE_PATH = require('path').join(
-  require('os').homedir(),
-  '.openclaw', 'workspace', 'hivesync', 'data', 'peer-cache.json'
-);
-
-function loadPeerCache(): string[] {
+/**
+ * Load previously cached service-node multiaddrs (peers that proved useful in a
+ * past run). Returns [] if the file is missing or unreadable — the cache is a
+ * best-effort accelerator, never a hard dependency.
+ */
+export function loadPeerCache(cachePath?: string): string[] {
+  if (!cachePath) return [];
   try {
-    const fs = require('fs');
-    if (fs.existsSync(PEER_CACHE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(PEER_CACHE_PATH, 'utf8'));
-      if (Array.isArray(data.peers) && data.peers.length) {
-        logger.info(`Loaded ${data.peers.length} cached peer(s) from ${PEER_CACHE_PATH}`);
-        return data.peers;
-      }
-    }
-  } catch (e: any) {
-    logger.debug('Peer cache load failed:', e.message);
+    if (!fs.existsSync(cachePath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+    if (!Array.isArray(parsed)) return [];
+    // Only keep dialable ws/wss multiaddrs that carry a /p2p/ id, and drop any
+    // foreign-fleet nodes an older (fleet-mixing) build may have cached.
+    return dropForeignFleet(
+      parsed.filter(
+        (m: unknown): m is string =>
+          typeof m === 'string' && /\/wss?(\/|$)/.test(m) && m.includes('/p2p/')
+      )
+    );
+  } catch (e) {
+    logger.debug('peer cache read failed:', e);
+    return [];
   }
-  return [];
 }
 
-function savePeerCache(peers: string[]): void {
+/**
+ * Persist up to `max` proven service-node multiaddrs, most-recent first. Writes
+ * atomically-ish (best effort) and never throws — a failed cache write must not
+ * disrupt messaging.
+ */
+export function savePeerCache(cachePath: string | undefined, addrs: string[], max: number): void {
+  if (!cachePath || addrs.length === 0) return;
   try {
-    const fs = require('fs');
-    const dir = require('path').dirname(PEER_CACHE_PATH);
+    const deduped = [...new Set(addrs)].slice(0, max);
+    const dir = path.dirname(cachePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      PEER_CACHE_PATH,
-      JSON.stringify({ peers, updated: new Date().toISOString() }, null, 2)
-    );
-    logger.debug(`Saved ${peers.length} peer(s) to peer cache`);
-  } catch (e: any) {
-    logger.debug('Peer cache save failed:', e.message);
+    fs.writeFileSync(cachePath, JSON.stringify(deduped, null, 2), { mode: 0o600 });
+  } catch (e) {
+    logger.debug('peer cache write failed:', e);
   }
+}
+
+/** The peerId of a multiaddr (the part after `/p2p/`), or the whole string. */
+function peerIdOf(multiaddr: string): string {
+  return multiaddr.split('/p2p/')[1] || multiaddr;
+}
+
+/**
+ * Merge two multiaddr lists, `primary` first, dropping any `extra` entry whose
+ * peerId already appears in `primary` (the same node reached via a second
+ * address is redundant for bootstrap).
+ */
+export function mergeByPeerId(primary: string[], extra: string[]): string[] {
+  const seen = new Set(primary.map(peerIdOf));
+  const merged = [...primary];
+  for (const addr of extra) {
+    if (!seen.has(peerIdOf(addr))) {
+      seen.add(peerIdOf(addr));
+      merged.push(addr);
+    }
+  }
+  return merged;
 }
 
 export type RawMessageHandler = (payload: Uint8Array) => void;
@@ -391,41 +439,29 @@ export class WakuTransport implements Transport {
     // is additive: defaultBootstrap (DoH + peer-exchange + peer-cache) still runs
     // below, so healthy networks are unaffected; the seeds are a fallback path.
     let bootstrapPeers = this.config.bootstrapNodes;
-    // Merge: system DNS + peer cache. Cached peers often have a proven history
-    // of accepting LightPush/Store, giving us a fallback when fleet nodes are
-    // flaky or overloaded.
-    let sysPeers: string[] = [];
     if (useDefaultBootstrap) {
-      sysPeers = await resolveBootstrapViaSystemDns();
+      const sysPeers = await resolveBootstrapViaSystemDns();
       if (sysPeers.length) {
         logger.info(
           `Pinned ${sysPeers.length} fleet bootstrap peer(s) via system DNS (DoH-independent)`
         );
+        bootstrapPeers = sysPeers;
       }
-    }
-    const cachedPeers = loadPeerCache();
-    if (cachedPeers.length) {
-      // Deduplicate: prefer cached peers (known-good), then append DNS peers.
-      const seen = new Set(cachedPeers.map(p => p.split('/p2p/')[1] || p));
-      const merged = [...cachedPeers];
-      for (const p of sysPeers) {
-        const pid = p.split('/p2p/')[1] || p;
-        if (!seen.has(pid)) merged.push(p);
+      // Re-seed peers that proved useful in a past run. On hosts where discovery
+      // is flaky this is often the difference between landing on a working peer
+      // set and timing out at 0 peers. Cached peers come first (known-good), then
+      // any fresh enrTree seeds, deduped by peerId so the same node via two
+      // addresses isn't dialed twice.
+      const cached = loadPeerCache(this.config.peerCachePath);
+      if (cached.length) {
+        bootstrapPeers = mergeByPeerId(cached, bootstrapPeers ?? []);
+        logger.info(`Re-seeded ${cached.length} proven peer(s) from cache`);
       }
-      bootstrapPeers = merged;
-      logger.info(
-        `Bootstrap: ${merged.length} peer(s) (${cachedPeers.length} cached + ` +
-        `${sysPeers.length - (merged.length - cachedPeers.length)} DNS)`
-      );
-    } else {
-      bootstrapPeers = sysPeers;
-    }
-    // Warm the peer cache with whatever bootstrap peers we resolved — these
-    // are known-dialable addresses that worked on this host.
-    if (bootstrapPeers && bootstrapPeers.length) {
-      const existing = loadPeerCache();
-      if (existing.length === 0 || bootstrapPeers.length > existing.length) {
-        savePeerCache(bootstrapPeers);
+      // First-run warm cache: persist the resolved enrTree seeds right away so
+      // even the very next restart has a known-dialable fallback set, before the
+      // periodic snapshot has had a chance to run.
+      if (!cached.length && bootstrapPeers && bootstrapPeers.length) {
+        savePeerCache(this.config.peerCachePath, bootstrapPeers, this.config.peerCacheSize ?? 20);
       }
     }
 
@@ -442,12 +478,30 @@ export class WakuTransport implements Transport {
     // numPeersToUse is honored at runtime (WakuNode -> PeerManager) but is not
     // in the SDK's CreateNodeOptions d.ts, hence the cast.
     const peerKey = await loadOrCreatePeerKey(this.config.peerKeyPath);
+    // Keep defaultBootstrap's peer-exchange + peer-cache discovery, but replace
+    // its DNS discovery: the SDK resolves BOTH fleet enrTrees (sandbox + test)
+    // over DoH, which splits agents across two disjoint meshes (see
+    // FOREIGN_FLEET_RE). We disable it and inject a sandbox-only wakuDnsDiscovery
+    // instead, so hosts where DoH works still get DNS discovery — fleet-pinned.
+    let sandboxDnsDiscovery: unknown[] = [];
+    try {
+      const { wakuDnsDiscovery, enrTree } = (await new Function(
+        'return import("@waku/discovery")'
+      )()) as typeof import('@waku/discovery');
+      sandboxDnsDiscovery = [wakuDnsDiscovery([enrTree.SANDBOX])];
+    } catch (e) {
+      logger.debug('sandbox DNS discovery unavailable:', e);
+    }
     this.node = await createLightNode({
       defaultBootstrap: useDefaultBootstrap,
+      discovery: { dns: false, peerExchange: true, peerCache: true },
       bootstrapPeers: bootstrapPeers && bootstrapPeers.length ? bootstrapPeers : undefined,
       networkConfig,
       numPeersToUse: this.config.lightPushPeers ?? 3,
-      ...(peerKey ? { libp2p: { privateKey: peerKey } } : {}),
+      libp2p: {
+        ...(peerKey ? { privateKey: peerKey } : {}),
+        ...(sandboxDnsDiscovery.length ? { peerDiscovery: sandboxDnsDiscovery } : {}),
+      },
     } as any);
 
     await this.node.start();
@@ -489,30 +543,84 @@ export class WakuTransport implements Transport {
       `Protocols — LightPush: ${!!this.node.lightPush}, Filter: ${!!this.node.filter}, Store: ${!!this.node.store}`
     );
 
-    // Peer cache: scrape connected peers' multiaddrs and persist them.
-    await this.scrapeAndCachePeers();
-    // Re-scrape every 60s to catch peers that connect after startup.
-    this.peerCacheTimer = setInterval(() => void this.scrapeAndCachePeers(), 60000);
+    this.startPeerCachePersistence();
+    this.startReconnectWatchdog();
+  }
+
+  /**
+   * Light-mode connectivity watchdog. A light node leans on the public fleet,
+   * and the system-DNS enrTree seeds are applied only ONCE at startup. If the
+   * node later drops to 0 peers (fleet churn, a transient network blip), nothing
+   * re-seeds it — it stays dark until the process restarts. This periodically
+   * checks the peer count and, when it hits 0, re-dials the proven peer cache
+   * plus freshly re-resolved enrTree seeds. Live recovery, no restart needed.
+   */
+  private startReconnectWatchdog(): void {
+    this.redialTimer = setInterval(() => void this.reseedIfIsolated(), 20000);
+    this.redialTimer.unref?.();
+  }
+
+  private async reseedIfIsolated(): Promise<void> {
+    if (!this.started || !this.node) return;
+    let count = 0;
+    try {
+      count = (await this.node.libp2p.getPeers()).length;
+    } catch {
+      return;
+    }
+    if (count > 0) return; // at least one peer — the SDK's peer manager tops up the rest
+
+    logger.warn('Light node at 0 peers — re-seeding from peer cache + enrTree');
+    const candidates = new Set<string>(loadPeerCache(this.config.peerCachePath));
+    const fresh = await resolveBootstrapViaSystemDns().catch(() => [] as string[]);
+    for (const a of fresh) candidates.add(a);
+    if (!candidates.size) return;
+
+    const ma = await loadMultiaddr();
+    let dialed = 0;
+    for (const addr of candidates) {
+      try {
+        await this.node.libp2p.dial(ma.multiaddr(addr));
+        dialed++;
+      } catch (e) {
+        logger.debug(`re-seed dial failed for ${addr}: ${(e as Error).message}`);
+      }
+    }
+    if (dialed) logger.info(`Re-seed dialed ${dialed} peer(s) after 0-peer drop`);
+  }
+
+  /**
+   * Periodically snapshot the dialable multiaddrs of currently-connected service
+   * nodes and persist them, so a later start can re-seed a known-good peer set
+   * instead of relying solely on (flaky) discovery. Best-effort, never throws.
+   */
+  private startPeerCachePersistence(): void {
+    if (!this.config.peerCachePath) return;
+    // One snapshot soon after connect, then refresh on an interval.
+    setTimeout(() => this.snapshotPeersToCache(), 10000).unref?.();
+    this.peerCacheTimer = setInterval(() => this.snapshotPeersToCache(), 60000);
     this.peerCacheTimer.unref?.();
   }
 
-  /** Scrape libp2p peer multiaddrs and write to the peer cache. */
-  private async scrapeAndCachePeers(): Promise<void> {
+  /** Persist the dialable multiaddrs of currently-connected service nodes. */
+  private snapshotPeersToCache(): void {
+    if (!this.config.peerCachePath || !this.node) return;
     try {
-      const connected = await this.node!.libp2p.getPeers();
-      const mas: string[] = [];
-      for (const p of connected) {
-        const addrs: string[] = (p.addrs as any[])?.map((a: any) => a.toString()) ?? [];
-        for (const a of addrs) {
-          if (/\/wss?(\/|$)/.test(a)) mas.push(a);
-        }
+      const conns = (this.node.libp2p.getConnections?.() ?? []) as any[];
+      const addrs: string[] = [];
+      for (const c of conns) {
+        const ma = c?.remoteAddr?.toString?.();
+        if (!ma || !/\/wss?(\/|$)/.test(ma)) continue; // light nodes dial ws/wss only
+        const peerId = c?.remotePeer?.toString?.();
+        addrs.push(ma.includes('/p2p/') || !peerId ? ma : `${ma}/p2p/${peerId}`);
       }
-      if (mas.length) {
-        savePeerCache(mas);
-        logger.info(`Cached ${mas.length} connected peer multiaddr(s) for next startup`);
+      // Never persist foreign-fleet peers (peer exchange can still surface them).
+      const sameFleet = dropForeignFleet(addrs);
+      if (sameFleet.length) {
+        savePeerCache(this.config.peerCachePath, sameFleet, this.config.peerCacheSize ?? 20);
       }
-    } catch (e: any) {
-      logger.debug('Peer cache scrape skipped:', e.message);
+    } catch (e) {
+      logger.debug('peer cache snapshot failed:', e);
     }
   }
 
@@ -591,7 +699,10 @@ export class WakuTransport implements Transport {
    */
   private startStorePolling(): void {
     if (this.storePollTimer) return;
-    this.lastStoreQueryTime = new Date();
+    // Start the cursor in the past so the first poll BACKFILLS messages that
+    // arrived while we were down (the bridge + DB dedupe re-ingested ones).
+    const backfillMs = (this.config.storeBackfillHours ?? 24) * 3600 * 1000;
+    this.lastStoreQueryTime = new Date(Date.now() - backfillMs);
     this.storePollTimer = setInterval(() => void this.pollStore(), 5000);
     this.storePollTimer.unref?.();
     logger.info('Started Store polling backstop for message retrieval');
@@ -747,10 +858,8 @@ export class WakuTransport implements Transport {
       clearInterval(this.peerCacheTimer);
       this.peerCacheTimer = null;
     }
-    // Final cache scrape before shutdown.
-    if (this.node) {
-      try { await this.scrapeAndCachePeers(); } catch { /* ignore */ }
-    }
+    // Final snapshot before shutdown so the freshest peer set is cached.
+    this.snapshotPeersToCache();
     if (this.storePollTimer) {
       clearInterval(this.storePollTimer);
       this.storePollTimer = null;
@@ -762,6 +871,10 @@ export class WakuTransport implements Transport {
     if (this.redialTimer) {
       clearInterval(this.redialTimer);
       this.redialTimer = null;
+    }
+    if (this.peerCacheTimer) {
+      clearInterval(this.peerCacheTimer);
+      this.peerCacheTimer = null;
     }
     if (this.relayUnsub) {
       try {
