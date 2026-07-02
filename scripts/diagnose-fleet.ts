@@ -27,7 +27,10 @@ async function resolveViaSystemDns(maxPeers = 8): Promise<string[]> {
   };
   const disco = new (DnsNodeDiscovery as any)(sysResolver);
   const found = new Set<string>();
-  for await (const peer of disco.getNextPeer([enrTree.SANDBOX, enrTree.TEST])) {
+  // SANDBOX only — mirror the daemon's fleet pinning. Mixing in TEST here made
+  // the store query land on a test-fleet node and report "0 messages" for a
+  // topic that has constant traffic on sandbox — a misleading verdict.
+  for await (const peer of disco.getNextPeer([enrTree.SANDBOX])) {
     const mas = ((peer as any).peerInfo?.multiaddrs ?? []).map((m: any) => m.toString());
     for (const ma of mas) if (/\/wss?(\/|$)/.test(ma)) found.add(ma);
     if (found.size >= maxPeers) break;
@@ -49,8 +52,10 @@ async function main(): Promise<void> {
   }
 
   log('\n=== 2. connect (like the daemon) ===');
+  // defaultBootstrap OFF: its DoH discovery resolves BOTH fleets and would
+  // reintroduce test-fleet peers, skewing the per-peer table and store query.
   const node = await createLightNode({
-    defaultBootstrap: true,
+    defaultBootstrap: false,
     bootstrapPeers: seeds,
     networkConfig: { clusterId, numShardsInCluster },
     numPeersToUse: 5,
