@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { WakuConfig } from '../types';
 import { Transport } from './transport';
 import { logger } from '../utils/logger';
@@ -179,7 +181,6 @@ async function resolveBootstrapViaSystemDns(maxPeers = 5, timeoutMs = 8000): Pro
 export function loadPeerCache(cachePath?: string): string[] {
   if (!cachePath) return [];
   try {
-    const fs = require('fs') as typeof import('fs');
     if (!fs.existsSync(cachePath)) return [];
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
     if (!Array.isArray(parsed)) return [];
@@ -205,8 +206,6 @@ export function loadPeerCache(cachePath?: string): string[] {
 export function savePeerCache(cachePath: string | undefined, addrs: string[], max: number): void {
   if (!cachePath || addrs.length === 0) return;
   try {
-    const fs = require('fs') as typeof import('fs');
-    const path = require('path') as typeof import('path');
     const deduped = [...new Set(addrs)].slice(0, max);
     const dir = path.dirname(cachePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
