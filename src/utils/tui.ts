@@ -709,7 +709,7 @@ export async function startTui(
           renderMessage(mkLocal(bridge.agentId, BROADCAST, text, false));
         } else {
           const encrypted = bridge.getKnownAgents().some((a) => a.id === openPeer && a.encPublicKey);
-          const msgId = await bridge.sendTextMessage(openPeer, text);
+          const { id: msgId } = await bridge.sendTextMessage(openPeer, text);
           const local = mkLocal(bridge.agentId, openPeer, text, encrypted);
           // Use the real message id so the peer's ACK upgrades ✓ → ✓✓.
           if (msgId) local.id = msgId;

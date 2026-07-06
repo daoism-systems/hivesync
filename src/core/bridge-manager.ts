@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
 import { HiveSync } from './hivesync-bridge';
 import { Identity } from './identity';
 import { Transport } from './transport';
@@ -400,33 +401,53 @@ export class BridgeManager extends EventEmitter {
    * command responses, cron/daemon traffic) so the recipient's autoreply guard
    * suppresses a reply and ping-pong is impossible. Human/explicit sends leave
    * it false. See docs/agent-coordination-protocol.md.
+   *
+   * Returns `delivered: false` when the push reached no peer — the message is
+   * then persisted UNDELIVERED so the outbox poller retries it, instead of
+   * being silently dropped while the caller sees success (the old behavior;
+   * it ate messages whenever the light node was in a 0-peer window).
    */
-  async sendTextMessage(recipient: string, text: string, auto = false): Promise<string> {
+  async sendTextMessage(
+    recipient: string,
+    text: string,
+    auto = false
+  ): Promise<{ id: string; delivered: boolean }> {
     const willEncrypt = recipient !== 'broadcast' && this.isAgentKnown(recipient);
+    const save = (id: string): Promise<void> =>
+      this.storage.saveMessage({
+        id,
+        sender: this.config.agentId,
+        recipient,
+        type: MessageType.TEXT,
+        content: { text },
+        timestamp: new Date(),
+        encrypted: willEncrypt,
+        auto,
+      });
 
-    const id = await this.hivesync.sendMessage({
-      sender: this.config.agentId,
-      recipient,
-      type: MessageType.TEXT,
-      content: { text },
-      encrypted: recipient !== 'broadcast',
-      auto,
-    });
-    // Record our own outgoing message (clean content) so history is complete.
-    // Mark it delivered immediately: we've already put it on the wire here, so
-    // the outbox poller must not pick it up and send it a second time.
-    await this.storage.saveMessage({
-      id,
-      sender: this.config.agentId,
-      recipient,
-      type: MessageType.TEXT,
-      content: { text },
-      timestamp: new Date(),
-      encrypted: willEncrypt,
-      auto,
-    });
-    await this.storage.markDelivered(id);
-    return id;
+    try {
+      const id = await this.hivesync.sendMessage({
+        sender: this.config.agentId,
+        recipient,
+        type: MessageType.TEXT,
+        content: { text },
+        encrypted: recipient !== 'broadcast',
+        auto,
+      });
+      // On the wire. Mark delivered so the outbox poller doesn't send it twice.
+      await save(id);
+      await this.storage.markDelivered(id);
+      return { id, delivered: true };
+    } catch (error) {
+      // Couldn't reach any peer (or the bridge is still connecting). Queue it:
+      // saved undelivered, the outbox poller re-sends until a push succeeds.
+      const id = uuidv4();
+      await save(id);
+      logger.warn(
+        `Send to ${recipient} failed (${(error as Error).message}); queued ${id} for outbox retry`
+      );
+      return { id, delivered: false };
+    }
   }
 
   private isAgentKnown(agentId: string): boolean {
@@ -458,24 +479,37 @@ export class BridgeManager extends EventEmitter {
   }
 
   async broadcastMessage(text: string): Promise<string> {
-    const id = await this.hivesync.sendMessage({
-      sender: this.config.agentId,
-      recipient: 'broadcast',
-      type: MessageType.TEXT,
-      content: { text },
-      encrypted: false,
-    });
-    await this.storage.saveMessage({
-      id,
-      sender: this.config.agentId,
-      recipient: 'broadcast',
-      type: MessageType.TEXT,
-      content: { text },
-      timestamp: new Date(),
-      encrypted: false,
-    });
-    await this.storage.markDelivered(id);
-    return id;
+    // Same write-ahead semantics as sendTextMessage: a broadcast that reached
+    // no peer stays undelivered and is retried by the outbox poller.
+    const save = (id: string): Promise<void> =>
+      this.storage.saveMessage({
+        id,
+        sender: this.config.agentId,
+        recipient: 'broadcast',
+        type: MessageType.TEXT,
+        content: { text },
+        timestamp: new Date(),
+        encrypted: false,
+      });
+    try {
+      const id = await this.hivesync.sendMessage({
+        sender: this.config.agentId,
+        recipient: 'broadcast',
+        type: MessageType.TEXT,
+        content: { text },
+        encrypted: false,
+      });
+      await save(id);
+      await this.storage.markDelivered(id);
+      return id;
+    } catch (error) {
+      const id = uuidv4();
+      await save(id);
+      logger.warn(
+        `Broadcast failed (${(error as Error).message}); queued ${id} for outbox retry`
+      );
+      return id;
+    }
   }
 
   /** Full text conversation (both directions) with one agent, oldest first. */

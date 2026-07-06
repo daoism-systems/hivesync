@@ -18,7 +18,7 @@ function fakeBridge() {
   bridge.getBroadcasts = async () => [] as Message[];
   bridge.sendTextMessage = async (to: string, text: string) => {
     sent.push({ to, text });
-    return 'id';
+    return { id: 'id', delivered: true };
   };
   bridge.broadcastMessage = async (text: string) => {
     sent.push({ to: 'broadcast', text });

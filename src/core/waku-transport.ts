@@ -788,18 +788,30 @@ export class WakuTransport implements Transport {
       const since = Date.now() - this.lastSendAt;
       if (since < gap) await delay(gap - since);
       try {
-        await this.lightPushWithRetries(payload, retries);
+        return await this.lightPushWithRetries(payload, retries);
       } finally {
         this.lastSendAt = Date.now();
       }
     });
     // Keep the chain alive even if this send threw.
-    this.sendChain = run.catch(() => undefined);
-    return run;
+    this.sendChain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    // Surface total failure to the caller: a publish that reached no peer at
+    // all must NOT look like success, or the message is silently dropped —
+    // the bridge's outbox only retries messages whose send threw.
+    if (!(await run)) {
+      throw new Error(`LightPush delivered to 0 peers after ${retries} attempts`);
+    }
   }
 
-  /** LightPush with retry/back-off + peer rotation (hang up on rejections). */
-  private async lightPushWithRetries(payload: Uint8Array, retries: number): Promise<void> {
+  /**
+   * LightPush with retry/back-off + peer rotation (hang up on rejections).
+   * Returns true once any peer accepts the push, false when every attempt
+   * reached 0 peers — the caller decides whether that is fatal.
+   */
+  private async lightPushWithRetries(payload: Uint8Array, retries: number): Promise<boolean> {
     // Clear stale entries (> 60s old) from the reject list.
     const staleCutoff = Date.now() - 60000;
     for (const [pid, ts] of this.rejectedPeers) {
@@ -816,7 +828,7 @@ export class WakuTransport implements Transport {
         result = { successes: [] };
       }
       if ((result.successes?.length ?? 0) > 0) {
-        return;
+        return true;
       }
       if (result.failures?.length) {
         lastFailures = JSON.stringify(result.failures);
@@ -834,9 +846,8 @@ export class WakuTransport implements Transport {
       await delay(backoff);
     }
 
-    // Don't crash — push failures are a transient network condition, not fatal.
-    // The bridge resends, and the peer can still reach us via Filter/Store.
-    logger.warn(`LightPush failed after ${retries} attempts (will be retried): ${lastFailures}`);
+    logger.warn(`LightPush failed after ${retries} attempts: ${lastFailures}`);
+    return false;
   }
 
   async getPeerCount(): Promise<number> {
