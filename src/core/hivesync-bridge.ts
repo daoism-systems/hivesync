@@ -118,10 +118,15 @@ export class HiveSync {
       void this.waitForPeers(15000)
         .then(() => this.announce())
         .catch((e) => logger.debug('initial announce failed:', e));
-      this.earlyAnnounceTimer = setTimeout(() => void this.announce(), 8000);
+      // Announces are periodic — a failed one is retried by the next tick, so
+      // swallow the (now-thrown) publish failure rather than crash the process
+      // with an unhandled rejection.
+      const announceSafe = (): void =>
+        void this.announce().catch((e) => logger.debug('announce failed:', e));
+      this.earlyAnnounceTimer = setTimeout(announceSafe, 8000);
       this.earlyAnnounceTimer.unref?.();
       const intervalSec = this.config.syncInterval > 0 ? this.config.syncInterval : 30;
-      this.announceTimer = setInterval(() => void this.announce(), intervalSec * 1000);
+      this.announceTimer = setInterval(announceSafe, intervalSec * 1000);
       this.announceTimer.unref?.();
 
       return true;

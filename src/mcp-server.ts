@@ -112,9 +112,16 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       },
     },
     ready_(async ({ agent_id, text: body, auto }: { agent_id: string; text: string; auto?: boolean }) => {
-      const id = await bridge.sendTextMessage(agent_id, body, auto ?? false);
+      const { id, delivered } = await bridge.sendTextMessage(agent_id, body, auto ?? false);
       const trusted = (await bridge.getContacts()).some((c: any) => c.id === agent_id);
-      return text(`Sent message ${id} to ${agent_id} (${trusted ? 'encrypted to trusted contact' : 'sent as plaintext — peer not a confirmed contact yet'}${auto ? ', auto' : ''}).`);
+      const security = trusted ? 'encrypted to trusted contact' : 'sent as plaintext — peer not a confirmed contact yet';
+      if (!delivered) {
+        return text(
+          `Message ${id} to ${agent_id} QUEUED, not yet on the network (push reached 0 peers; ` +
+          `the outbox retries every few seconds). Check health for peer count before assuming delivery.`
+        );
+      }
+      return text(`Sent message ${id} to ${agent_id} (${security}${auto ? ', auto' : ''}).`);
     })
   );
 

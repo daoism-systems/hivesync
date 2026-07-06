@@ -119,6 +119,39 @@ describe('BridgeManager communication (in-memory transport)', () => {
     expect(gotReply).toBe(true);
   }, 20000);
 
+  test('queues a message when the transport is down and the outbox delivers it on recovery', async () => {
+    // Regression: a publish that reaches no peer used to be marked delivered
+    // anyway — silently dropped while the caller saw success.
+    const flaky = new InMemoryTransport(TOPIC, 'agent-alpha');
+    const realPublish = flaky.publish.bind(flaky);
+    let failing = false;
+    flaky.publish = async (payload: Uint8Array): Promise<void> => {
+      if (failing) throw new Error('LightPush delivered to 0 peers after 5 attempts');
+      return realPublish(payload);
+    };
+    await alpha.stop();
+    alpha = new BridgeManager(makeConfig('agent-alpha', 'Agent Alpha'), flaky);
+
+    await alpha.start();
+    await beta.start();
+    await establishTrust(alpha, beta, 'agent-alpha', 'agent-beta');
+
+    failing = true;
+    const { delivered } = await alpha.sendTextMessage('agent-beta', 'delayed hello');
+    expect(delivered).toBe(false);
+
+    // While the transport is down the message must be queued, not dropped.
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await beta.getUnreadMessages()).some((m) => m.content.text === 'delayed hello')).toBe(false);
+
+    failing = false; // network recovers; the outbox poller (2s) should resend
+    const received = await waitFor(async () => {
+      const msgs = await beta.getUnreadMessages();
+      return msgs.some((m) => m.type === MessageType.TEXT && m.content.text === 'delayed hello');
+    }, 10000);
+    expect(received).toBe(true);
+  }, 30000);
+
   test('records both sides of a conversation in history', async () => {
     await alpha.start();
     await beta.start();

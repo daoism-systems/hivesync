@@ -257,8 +257,12 @@ program
       const bridge = new BridgeManager(config);
       await bridge.start();
 
-      const msgId = await bridge.sendTextMessage(recipient, message);
-      logger.success(`Message sent! ID: ${msgId}`);
+      const { id: msgId, delivered } = await bridge.sendTextMessage(recipient, message);
+      if (delivered) {
+        logger.success(`Message sent! ID: ${msgId}`);
+      } else {
+        logger.warn(`Message queued (push reached 0 peers) — a running daemon will retry. ID: ${msgId}`);
+      }
 
       await bridge.stop();
     } catch (error) {

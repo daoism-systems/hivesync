@@ -41,8 +41,12 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
         const recipient = args[0];
         const message = args.slice(1).join(' ');
         try {
-          const msgId = await bridge.sendTextMessage(recipient, message);
-          console.log(chalk.green(`✓ Message sent! ID: ${msgId}`));
+          const { id: msgId, delivered } = await bridge.sendTextMessage(recipient, message);
+          if (delivered) {
+            console.log(chalk.green(`✓ Message sent! ID: ${msgId}`));
+          } else {
+            console.log(chalk.yellow(`⏳ Message queued (0 peers right now) — outbox will retry. ID: ${msgId}`));
+          }
         } catch (error) {
           console.log(chalk.red(`✗ Failed to send message: ${(error as Error).message}`));
         }
