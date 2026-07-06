@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import sqlite3 from 'sqlite3';
 import { BridgeManager } from './core/bridge-manager';
+import { applyUpdate, checkForUpdate, defaultRepoRoot } from './core/self-update';
 import { setupInteractiveMode } from './utils/interactive';
 import { startTui } from './utils/tui';
 import { loadConfig } from './utils/config';
@@ -209,6 +210,68 @@ program
   .description('Run setup wizard for initial configuration')
   .action(async () => {
     await runSetupWizard();
+  });
+
+program
+  .command('update')
+  .description('Self-update this checkout from git: ff-only pull + npm ci + build (+ optional restart)')
+  .option('-c, --config <path>', 'Configuration file path', './config/hivesync.yaml')
+  .option('--check', 'Only check for an update; exit 0 = up to date, 10 = update available')
+  .option('--no-restart', 'Skip the configured update.restartCommand after updating')
+  .action(async (options) => {
+    try {
+      const config = await loadConfig(options.config);
+      const updateOpts = {
+        remote: config.update?.remote,
+        branch: config.update?.branch,
+        restartCommand: options.restart === false ? undefined : config.update?.restartCommand,
+      };
+
+      const repoRoot = defaultRepoRoot();
+      console.log(chalk.gray(`Checking ${repoRoot} against ${updateOpts.remote ?? 'origin'}/${updateOpts.branch ?? 'main'}...`));
+      const check = await checkForUpdate(repoRoot, updateOpts);
+
+      if (!check.updateAvailable) {
+        console.log(chalk.green(`✅ Up to date at ${check.currentSha.slice(0, 7)}`));
+        if (check.blockers.length > 0) {
+          console.log(chalk.yellow(`   (note: ${check.blockers.join('; ')})`));
+        }
+        return;
+      }
+
+      console.log(
+        chalk.cyan(
+          `Update available: ${check.currentSha.slice(0, 7)} → ${check.remoteSha.slice(0, 7)} (${check.behind} commit(s) behind)`
+        )
+      );
+      if (options.check) {
+        if (check.blockers.length > 0) {
+          console.log(chalk.yellow(`Blockers: ${check.blockers.join('; ')}`));
+        }
+        process.exitCode = 10;
+        return;
+      }
+      if (check.blockers.length > 0) {
+        console.log(chalk.red(`❌ Refusing to update: ${check.blockers.join('; ')}`));
+        console.log(chalk.gray('Resolve the above (commit/stash/push) and rerun.'));
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(chalk.gray('Fast-forwarding, installing dependencies, building...'));
+      const result = await applyUpdate(check, updateOpts);
+      console.log(chalk.green(`✅ Updated to ${result.toSha.slice(0, 7)}`));
+      if (result.restartSpawned) {
+        console.log(chalk.gray(`Restart command spawned: ${config.update?.restartCommand}`));
+      } else if (config.update?.restartCommand) {
+        console.log(chalk.gray('Restart skipped (--no-restart).'));
+      } else {
+        console.log(chalk.gray('No update.restartCommand configured — restart your daemon manually.'));
+      }
+    } catch (error) {
+      logger.error('Update failed:', error);
+      process.exitCode = 1;
+    }
   });
 
 program

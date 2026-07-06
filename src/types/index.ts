@@ -291,6 +291,25 @@ export interface BridgeConfig {
      */
     onMessage?: string;
   };
+  /**
+   * Self-update (`hivesync update`) settings. Updates are always operator-
+   * initiated — a mesh message can announce that one exists but never
+   * triggers one. See src/core/self-update.ts.
+   */
+  update?: {
+    /** git remote to update from. Default 'origin'. */
+    remote?: string;
+    /** Branch to follow. Default 'main'. */
+    branch?: string;
+    /**
+     * Shell command run (detached) after a successful update — the host-
+     * specific "restart my daemon" step, e.g. `systemctl --user restart
+     * hivesync` on claw's Steam Deck or a pm2/cron-friendly restart on the
+     * VPS. Operator-controlled, same trust model as hooks.onMessage; nothing
+     * is ever interpolated into it.
+     */
+    restartCommand?: string;
+  };
 }
 
 /** An untrusted message held in the quarantine folder (never executed). */
