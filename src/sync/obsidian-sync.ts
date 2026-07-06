@@ -1,6 +1,7 @@
 import { MessageType, ObsidianNote, SyncState } from '../types';
 import { HiveSync } from '../core/hivesync-bridge';
 import { StorageManager } from '../storage/storage-manager';
+import { mergeNoteContent } from './merge';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -123,72 +124,93 @@ export class ObsidianSyncManager {
 
     console.log(`Processing ${notes.length} notes from ${sender}`);
 
-    let conflicts = 0;
     let synced = 0;
 
     for (const noteData of notes) {
-      const note: ObsidianNote = {
-        id: noteData.id || uuidv4(),
-        path: noteData.path,
-        content: noteData.content,
-        lastModified: new Date(noteData.lastModified),
-        hash: noteData.hash,
-      };
-
-      // Check for conflicts
-      const existingNote = await this.storage.getNoteByPath(note.path);
-      
-      if (existingNote) {
-        // Conflict resolution: keep the most recent version
-        if (note.lastModified > existingNote.lastModified) {
-          await this.saveNoteToVault(note);
-          await this.storage.saveNote(note);
-          synced++;
-        } else {
-          conflicts++;
-        }
-      } else {
-        // New note
-        await this.saveNoteToVault(note);
-        await this.storage.saveNote(note);
+      const note = await this.mergeIncomingNote(noteData, sender);
+      if (note) {
         synced++;
       }
-
-      // Mark as synced
-      await this.storage.markNoteAsSynced(note.id, sender);
     }
 
     // Update sync state
-    await this.storage.updateSyncState(sender, synced, conflicts);
+    await this.storage.updateSyncState(sender, synced, 0);
 
-    console.log(`Sync completed: ${synced} notes synced, ${conflicts} conflicts`);
+    console.log(`Sync completed: ${synced} notes merged additively`);
+  }
+
+  /**
+   * Additively merge one incoming note: never delete, never shrink — local
+   * content is kept and remote-only blocks are appended. Returns the note
+   * that was written, or null when nothing changed (or a tombstone arrived).
+   */
+  private async mergeIncomingNote(noteData: any, sender: string): Promise<ObsidianNote | null> {
+    // Deletion tombstones are ignored — additive sync never removes content.
+    if (noteData.hash === 'DELETED' || noteData.content === '') {
+      console.log(`Ignoring deletion tombstone for ${noteData.path} (additive sync)`);
+      return null;
+    }
+
+    const existingNote = await this.storage.getNoteByPath(noteData.path);
+
+    // The file on disk is the authoritative local content — storage can lag
+    // behind or run ahead of it; merging against anything else risks
+    // overwriting bytes that were never merged.
+    let localContent = '';
+    const fullPath = path.join(this.vaultPath, noteData.path);
+    if (fs.existsSync(fullPath)) {
+      try {
+        localContent = fs.readFileSync(fullPath, 'utf-8');
+      } catch {
+        localContent = '';
+      }
+    }
+
+    const merge = mergeNoteContent(localContent, noteData.content);
+    if (!merge.changed) {
+      return null;
+    }
+
+    const note: ObsidianNote = {
+      id: existingNote?.id || noteData.id || uuidv4(),
+      path: noteData.path,
+      content: merge.content,
+      lastModified: new Date(),
+      hash: this.calculateHash(merge.content),
+    };
+
+    await this.saveNoteToVault(note);
+    await this.storage.saveNote(note);
+    await this.storage.markNoteAsSynced(note.id, sender);
+    return note;
   }
 
   private async handleObsidianUpdate(message: any): Promise<void> {
     const noteData = message.content;
-    const note: ObsidianNote = {
-      id: noteData.id || uuidv4(),
-      path: noteData.path,
-      content: noteData.content,
-      lastModified: new Date(noteData.lastModified),
-      hash: noteData.hash,
-    };
 
-    // Save the note
-    await this.saveNoteToVault(note);
-    await this.storage.saveNote(note);
+    const note = await this.mergeIncomingNote(noteData, message.sender);
+    if (!note) {
+      return;
+    }
 
-    console.log(`Updated note: ${note.path} from ${message.sender}`);
+    console.log(`Merged note: ${note.path} from ${message.sender}`);
 
-    // Forward to other agents (except sender)
+    // Forward the merged version to other agents (except sender) — each hop
+    // only ever adds content, so propagation is safe and converges.
     const agents = await this.storage.getAllAgents();
     for (const agent of agents) {
-      if (agent.id !== message.sender) {
+      if (agent.id !== message.sender && agent.id !== this.bridge.agentId) {
         const updateMessage = {
           sender: this.bridge.agentId,
           recipient: agent.id,
           type: MessageType.OBSIDIAN_UPDATE,
-          content: noteData,
+          content: {
+            id: note.id,
+            path: note.path,
+            content: note.content,
+            lastModified: note.lastModified.toISOString(),
+            hash: note.hash,
+          },
           encrypted: true,
         };
         await this.bridge.sendMessage(updateMessage);
@@ -238,7 +260,10 @@ export class ObsidianSyncManager {
   }
 
   private async getModifiedNotesSince(since: Date): Promise<any[]> {
-    const notes = await this.storage.getModifiedNotes(since);
+    // Deletion tombstones are never shared — additive sync only propagates content.
+    const notes = (await this.storage.getModifiedNotes(since)).filter(
+      note => note.hash !== 'DELETED' && note.content !== ''
+    );
     return notes.map(note => ({
       id: note.id,
       path: note.path,
