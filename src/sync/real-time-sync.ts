@@ -2,6 +2,7 @@ import { MessageType, ObsidianNote, SyncState } from '../types';
 import { HiveSync } from '../core/hivesync-bridge';
 import { StorageManager } from '../storage/storage-manager';
 import { FileWatcher, FileChangeEvent } from './file-watcher';
+import { mergeNoteContent, blocksMissingFrom } from './merge';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -60,6 +61,14 @@ export class RealTimeSyncManager {
     );
 
     await this.fileWatcher.start();
+
+    // Flush the initial scan into storage immediately (instead of waiting for
+    // the debounce) so the first sync request/response sees the full vault.
+    if (this.syncDebounceTimer) {
+      clearTimeout(this.syncDebounceTimer);
+      this.syncDebounceTimer = null;
+    }
+    await this.processPendingChanges();
 
     // Perform initial sync with all known agents
     await this.syncWithAllAgents();
@@ -146,17 +155,17 @@ export class RealTimeSyncManager {
 
       // Check if file still exists
       if (!fs.existsSync(fullPath)) {
-        // File was deleted
-        await this.storage.getNoteByPath(filePath).then(async (note) => {
-          if (note) {
-            // Mark note as deleted in storage
-            await this.storage.saveNote({
-              ...note,
-              content: '',
-              hash: 'DELETED',
-            });
+        // Additive sync: the vault only ever expands. A deleted note is
+        // restored from its last known content in storage, and no deletion
+        // ever propagates to peers.
+        const stored = await this.storage.getNoteByPath(filePath);
+        if (stored && stored.hash !== 'DELETED' && stored.content !== '') {
+          this.remoteWrites.add(filePath);
+          if (this.fileWatcher) {
+            await this.fileWatcher.saveNoteContent(filePath, stored.content);
           }
-        });
+          logger.info(`Restored locally deleted note ${filePath} (additive sync never deletes)`);
+        }
         return;
       }
 
@@ -240,11 +249,38 @@ export class RealTimeSyncManager {
 
     logger.info(`Received ${notes.length} updates from ${sender}`);
 
-    let conflicts = 0;
+    const { applied, enriched } = await this.mergeIncomingNotes(notes);
+
+    // Update sync state
+    await this.storage.updateSyncState(sender, applied, 0);
+
+    // Reciprocal enrichment: for notes where we held content the sender lacks,
+    // push the merged version back so the sender's vault expands too. The
+    // exchange terminates because merging is idempotent — once both sides hold
+    // the same block set, merges stop producing changes.
+    if (enriched.length > 0) {
+      await this.sendNotesToAgent(sender, enriched);
+    }
+
+    logger.info(
+      `Merged ${applied} updates from ${sender}` +
+        (enriched.length > 0 ? `, sent ${enriched.length} enriched notes back` : '')
+    );
+  }
+
+  /**
+   * Additively merge incoming notes into the vault. Never deletes or shrinks
+   * a local note. Returns the notes where the merge result contains content
+   * the sender didn't have (candidates for reciprocal enrichment).
+   */
+  private async mergeIncomingNotes(
+    notes: any[]
+  ): Promise<{ applied: number; enriched: ObsidianNote[] }> {
     let applied = 0;
+    const enriched: ObsidianNote[] = [];
 
     for (const noteData of notes) {
-      const note: ObsidianNote = {
+      const incoming: ObsidianNote = {
         id: noteData.id || uuidv4(),
         path: noteData.path,
         content: noteData.content,
@@ -252,43 +288,87 @@ export class RealTimeSyncManager {
         hash: noteData.hash,
       };
 
-      // Skip deleted notes
-      if (note.hash === 'DELETED') {
-        if (this.fileWatcher) {
-          await this.fileWatcher.deleteNote(note.path);
-        }
+      // Additive sync: remote deletion tombstones are ignored — a peer
+      // deleting a note never deletes ours.
+      if (incoming.hash === 'DELETED' || incoming.content === '') {
+        logger.info(`Ignoring deletion tombstone for ${incoming.path} (additive sync)`);
         continue;
       }
 
-      // Check for conflicts
-      const existingNote = await this.storage.getNoteByPath(note.path);
-      
-      if (existingNote) {
-        // Conflict resolution: keep the most recent version
-        if (note.lastModified > existingNote.lastModified) {
-          await this.applyNoteUpdate(note);
-          applied++;
-        } else if (note.lastModified.getTime() === existingNote.lastModified.getTime()) {
-          // Same timestamp, compare hashes
-          if (note.hash !== existingNote.hash) {
-            conflicts++;
-            logger.warn(`Conflict detected for ${note.path}`);
-            // For now, keep existing version
-          }
-        } else {
-          conflicts++;
+      const existingNote = await this.storage.getNoteByPath(incoming.path);
+
+      // The file on disk is the authoritative local content. Storage may lag
+      // behind it (update arriving before the initial scan finishes) or run
+      // ahead of it (a locally deleted file whose content storage retains so
+      // peers can restore it) — merging against anything but the real file
+      // could overwrite bytes we never merged.
+      let localContent = '';
+      const fullPath = path.join(this.vaultPath, incoming.path);
+      if (fs.existsSync(fullPath)) {
+        try {
+          localContent = fs.readFileSync(fullPath, 'utf-8');
+        } catch (error) {
+          logger.warn(`Could not read ${incoming.path} for merge, treating as empty:`, error);
         }
-      } else {
-        // New note
-        await this.applyNoteUpdate(note);
+      }
+
+      const merge = mergeNoteContent(localContent, incoming.content);
+
+      if (merge.changed) {
+        const mergedNote: ObsidianNote = {
+          id: existingNote?.id || incoming.id,
+          path: incoming.path,
+          content: merge.content,
+          lastModified: new Date(),
+          hash: this.calculateHash(merge.content),
+        };
+        await this.applyNoteUpdate(mergedNote);
         applied++;
+        // Reply only if we hold blocks the sender lacks (block-set comparison,
+        // so order-only differences never trigger a reply loop).
+        if (blocksMissingFrom(merge.content, incoming.content).length > 0) {
+          enriched.push(mergedNote);
+        }
+      } else if (
+        localContent !== '' &&
+        blocksMissingFrom(localContent, incoming.content).length > 0
+      ) {
+        // Nothing new for us, but our copy has blocks the sender lacks.
+        enriched.push({
+          id: existingNote?.id || incoming.id,
+          path: incoming.path,
+          content: localContent,
+          lastModified: new Date(),
+          hash: this.calculateHash(localContent),
+        });
       }
     }
 
-    // Update sync state
-    await this.storage.updateSyncState(sender, applied, conflicts);
+    return { applied, enriched };
+  }
 
-    logger.info(`Applied ${applied} updates, ${conflicts} conflicts from ${sender}`);
+  private async sendNotesToAgent(agentId: string, notes: ObsidianNote[]): Promise<void> {
+    try {
+      const updateMessage = {
+        sender: this.bridge.agentId,
+        recipient: agentId,
+        type: MessageType.OBSIDIAN_UPDATE,
+        content: {
+          notes: notes.map((note) => ({
+            id: note.id,
+            path: note.path,
+            content: note.content,
+            lastModified: note.lastModified.toISOString(),
+            hash: note.hash,
+          })),
+          timestamp: new Date().toISOString(),
+        },
+        encrypted: true,
+      };
+      await this.bridge.sendMessage(updateMessage);
+    } catch (error) {
+      logger.error(`Error sending enriched notes to ${agentId}:`, error);
+    }
   }
 
   private async applyNoteUpdate(note: ObsidianNote): Promise<void> {
@@ -306,8 +386,11 @@ export class RealTimeSyncManager {
     const { since, requestId } = message.content;
     const sinceDate = new Date(since);
 
-    // Get modified notes since last sync
-    const modifiedNotes = await this.storage.getModifiedNotes(sinceDate);
+    // Get modified notes since last sync. Deletion tombstones are never
+    // shared — additive sync only ever propagates content.
+    const modifiedNotes = (await this.storage.getModifiedNotes(sinceDate)).filter(
+      (note) => note.hash !== 'DELETED' && note.content !== ''
+    );
 
     const syncResponse = {
       sender: this.bridge.agentId,
@@ -337,38 +420,21 @@ export class RealTimeSyncManager {
 
     logger.info(`Processing sync response with ${notes.length} notes from ${sender}`);
 
-    let conflicts = 0;
-    let applied = 0;
-
-    for (const noteData of notes) {
-      const note: ObsidianNote = {
-        id: noteData.id || uuidv4(),
-        path: noteData.path,
-        content: noteData.content,
-        lastModified: new Date(noteData.lastModified),
-        hash: noteData.hash,
-      };
-
-      // Check for conflicts
-      const existingNote = await this.storage.getNoteByPath(note.path);
-      
-      if (existingNote) {
-        if (note.lastModified > existingNote.lastModified) {
-          await this.applyNoteUpdate(note);
-          applied++;
-        } else {
-          conflicts++;
-        }
-      } else {
-        await this.applyNoteUpdate(note);
-        applied++;
-      }
-    }
+    const { applied, enriched } = await this.mergeIncomingNotes(notes);
 
     // Update sync state
-    await this.storage.updateSyncState(sender, applied, conflicts);
+    await this.storage.updateSyncState(sender, applied, 0);
 
-    logger.info(`Sync completed: ${applied} applied, ${conflicts} conflicts`);
+    // Push back anything we hold that the sender lacks — sync rounds enrich
+    // both vaults, not just ours.
+    if (enriched.length > 0) {
+      await this.sendNotesToAgent(sender, enriched);
+    }
+
+    logger.info(
+      `Sync completed: ${applied} merged` +
+        (enriched.length > 0 ? `, ${enriched.length} enriched notes sent back` : '')
+    );
   }
 
   async syncWithAllAgents(): Promise<void> {
