@@ -267,7 +267,7 @@ class HiveSyncAdapter(BasePlatformAdapter):
             old = self._relayed_order.pop(0)
             self._relayed_ids.discard(old)
 
-    async def connect(self):
+    async def connect(self, is_reconnect=False, **kwargs):
         if not os.path.exists(self.db_path):
             logger.warning("HiveSync: DB not found at %s", self.db_path)
             return False
