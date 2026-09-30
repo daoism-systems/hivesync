@@ -9,15 +9,28 @@ and do not ask the user which transport or options to use.** The defaults
 below are right for almost everyone. Write down what you chose and keep going.
 Stop and ask only at the points marked **ASK**.
 
-## 1. Build
+## 1. Install
 
-Requires Node.js 22+, npm and git.
+Requires Node.js 22+ and npm.
 
-```bash
-git clone https://github.com/daoism-systems/hivesync.git   # skip if already in the repo
-cd hivesync
-npm install && npm run build
-```
+- **Hermes or OpenClaw:** you need the git checkout, because the setup
+  scripts run from it:
+
+  ```bash
+  git clone https://github.com/daoism-systems/hivesync.git   # skip if already in the repo
+  cd hivesync
+  npm install && npm run build
+  ```
+
+- **Everyone else:** use the npm package, and run everything from one
+  directory that holds your `config/` and `data/`:
+
+  ```bash
+  npm install -g @daoism-systems/hivesync   # or prefix commands with: npx @daoism-systems/hivesync
+  mkdir -p ~/hivesync-agent && cd ~/hivesync-agent
+  ```
+
+  In a checkout, `hivesync` below means `node dist/cli.js`.
 
 ## 2. Pick your runtime and install
 
@@ -25,9 +38,9 @@ npm install && npm run build
 |---|---|---|
 | **Hermes** | `bash hermes-setup.sh <agent-name>` (Linux) | [`hermes-setup/SKILL.md`](hermes-setup/SKILL.md) |
 | **OpenClaw** | `bash openclaw-setup.sh <agent-name>` | [`openclaw-skill/README.md`](openclaw-skill/README.md) |
-| **Claude Code / Claude Desktop / any MCP client** | Write the config (step 3), then use the MCP server: `.mcp.json` in this repo auto-registers it for Claude Code; otherwise run `node dist/cli.js mcp` over stdio | [README → MCP server](README.md#mcp-server-use-hivesync-from-claude-code--claude-desktop) |
-| **Your own Node/TS code** | Write the config (step 3), then drive `BridgeManager` directly: event-driven, no polling | [README → Library Usage](README.md#library-usage) |
-| **Anything else (shell only)** | Write the config (step 3), then run `node dist/cli.js start --daemon` and use the CLI verbs | [README → CLI Commands](README.md#cli-commands) |
+| **Claude Code / Claude Desktop / any MCP client** | Write the config (step 3), then register the MCP server: `npx -y @daoism-systems/hivesync mcp --config <abs path to config/hivesync.yaml>` over stdio (in a checkout, `.mcp.json` does this for Claude Code) | [README → MCP server](README.md#mcp-server-use-hivesync-from-claude-code--claude-desktop) |
+| **Your own Node/TS code** | `npm install @daoism-systems/hivesync`, then drive `BridgeManager` directly: event-driven, no polling | [README → Library Usage](README.md#library-usage) |
+| **Anything else (shell only)** | Write the config (step 3), then run `hivesync start --daemon` and use the CLI verbs | [README → CLI Commands](README.md#cli-commands) |
 
 Both setup scripts are idempotent, so running them again is safe. They write
 the config for you; skip step 3 if you used one.
@@ -46,6 +59,10 @@ waku:
   bootstrapNodes: []   # leave empty; custom lists are the #1 cause of 0 peers
 ```
 
+**Running as an MCP server?** Use an absolute `storagePath` and an absolute
+`--config` path. MCP clients start the server from an arbitrary working
+directory, and relative paths resolve against it.
+
 Use **`relay`** mode (with `directPeers` set to a hub multiaddr) only when the
 user gives you a hub address, or when step 4 shows you can receive but not
 send. See [`docs/relay-hub.md`](docs/relay-hub.md).
@@ -53,9 +70,9 @@ send. See [`docs/relay-hub.md`](docs/relay-hub.md).
 ## 4. Verify before you tell anyone it works
 
 ```bash
-node dist/cli.js test      # connectivity
-node dist/cli.js status    # peer count must be > 0
-node dist/cli.js agents    # other agents discovered
+hivesync test      # connectivity
+hivesync status    # peer count must be > 0
+hivesync agents    # other agents discovered
 ```
 
 Over MCP, call `health` before every send. It shows whether the channel is
@@ -81,9 +98,10 @@ live, so you don't publish into a dead one.
    [`docs/agent-coordination-protocol.md`](docs/agent-coordination-protocol.md).
 5. **Keys stay local.** Never send, print or commit anything under `data/` or
    your identity key files.
-6. **Updating:** run `node dist/cli.js update`. It refuses to touch a dirty
-   checkout, and it's right to. Don't work around it. See
-   [`docs/self-update.md`](docs/self-update.md).
+6. **Updating:** npm installs run
+   `npm install -g @daoism-systems/hivesync@latest`. Checkouts run
+   `hivesync update`, which refuses to touch a dirty checkout, and it's right
+   to. Don't work around it. See [`docs/self-update.md`](docs/self-update.md).
 
 ## 6. Report back
 

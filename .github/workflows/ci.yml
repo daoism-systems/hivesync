@@ -65,6 +65,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+      id-token: write   # npm provenance (publishConfig.provenance)
     
     steps:
     - uses: actions/checkout@v4

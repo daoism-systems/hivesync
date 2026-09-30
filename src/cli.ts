@@ -228,6 +228,13 @@ program
       };
 
       const repoRoot = defaultRepoRoot();
+      if (!fs.existsSync(path.join(repoRoot, '.git'))) {
+        // npm/tarball install — there is no checkout to pull. Point at npm instead.
+        console.log(chalk.yellow(`${repoRoot} is an npm install, not a git checkout.`));
+        console.log(chalk.gray('Upgrade with: npm install -g @daoism-systems/hivesync@latest'));
+        process.exitCode = 1;
+        return;
+      }
       console.log(chalk.gray(`Checking ${repoRoot} against ${updateOpts.remote ?? 'origin'}/${updateOpts.branch ?? 'main'}...`));
       const check = await checkForUpdate(repoRoot, updateOpts);
 
