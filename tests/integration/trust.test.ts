@@ -136,6 +136,37 @@ describe('Access control (handshake approval)', () => {
     }
   }, 20000);
 
+  test('a re-init from an already-approved peer keeps it trusted and re-sends acceptance', async () => {
+    const { alpha, beta, dir } = setup();
+    cleanups.push(dir);
+    try {
+      await alpha.start();
+      await beta.start();
+      await alpha.waitForAgent('beta', 5000);
+      await beta.waitForAgent('alpha', 5000);
+      await approvePeerOn(beta, 'alpha');
+
+      // alpha missed beta's acceptance (lost ack / restart) and handshakes again.
+      // beta must answer "accepted", not demote alpha to pending.
+      await (alpha as any).hivesync.sendHandshakeInit('beta');
+      expect(await waitFor(() => alpha.getHandshakeStatus('beta')?.status === 'confirmed', 5000)).toBe(true);
+      expect(beta.getHandshakeStatus('alpha')?.status).toBe('confirmed');
+
+      const trusted = await new Promise<boolean>((resolve) => {
+        beta.on('text', (m) => {
+          if (m.content.text === 'after re-init') resolve(true);
+        });
+        void alpha.sendTextMessage('beta', 'after re-init');
+        setTimeout(() => resolve(false), 5000);
+      });
+      expect(trusted).toBe(true);
+      expect(await beta.getQuarantineCount()).toBe(0);
+    } finally {
+      await alpha.stop();
+      await beta.stop();
+    }
+  }, 20000);
+
   test('denying a handshake leaves the peer untrusted (messages quarantined)', async () => {
     const { alpha, beta, dir } = setup();
     cleanups.push(dir);
