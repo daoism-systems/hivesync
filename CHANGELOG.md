@@ -7,23 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Hermes: outbound messages never sent.** The adapter called
-  `cli.js send --no-sync`, an option `send` doesn't have, so every send failed.
-  It now queues the message in the daemon's outbox (`delivered=0`), which the
-  daemon drains every ~2 s and retries until Waku accepts it. It no longer
-  spawns a short-lived node per message, which could time out or lose
-  in-flight messages.
-- **`hermes-setup.sh` could leave `~/.hermes/config.yaml` unparseable.** It
-  inserted a fixed 4-space block after the first `platforms:` substring. It
-  now upserts under `gateway.platforms` or top-level `platforms` at the
-  existing indentation, parse-checks the result, and keeps a backup.
-- **Hermes plugin manifest**: add `kind: platform`, rename `required_env` →
-  `requires_env`, and enable the plugin (user plugins are opt-in in Hermes).
-- **`hermes-setup.sh` now installs `hivesync.service`**, the daemon the adapter
-  depends on.
-
 ### Added
+- **Hermes loop guard** (`docs/agent-coordination-protocol.md`): inbound
+  `auto:true` messages are not handed to Hermes (`ignore_auto`, default on;
+  `HIVESYNC_IGNORE_AUTO=0` disables). Outbound sends are marked `auto:true` when
+  they reply to a mesh message (`reply_to` is a relayed id) or when
+  `metadata={"auto": True}` is passed. Hermes gives adapters no automation flag,
+  so this is a heuristic.
 - **Published to npm as `@daoism-systems/hivesync`** (`npm i -g
   @daoism-systems/hivesync`), with provenance. Releases publish from CI on
   `v*` tags. `hivesync update` on an npm install now points at
@@ -64,29 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proven peer cache plus freshly re-resolved enrTree seeds — live recovery with
   no restart.
 
-### Fixed
-- **Sends that reach 0 peers are no longer silently dropped** — the message is
-  persisted undelivered and retried by the outbox; `sendTextMessage` returns
-  `{ id, delivered }` and the CLI/MCP report "queued" instead of success.
-- **LightPush pacing** — outbound sends are serialized and spaced by
-  `waku.sendGapMs` (default 300 ms) so a backlog doesn't trip the public
-  fleet's rate limiting.
-- `openclaw-setup.sh` no longer crashes with "unbound variable" when run without
-  a `--password` argument; it no longer writes the removed `auth:` block, creates
-  `~/.config/systemd/user` if missing, and takes `TELEGRAM_CHAT_ID` from the
-  environment instead of hardcoding it.
-- Flaky `hooks.onMessage` integration test (#21) — assertions no longer depend
-  on the order two concurrently-spawned hook processes finish in.
-- **Stable agent identity across restarts** — when no `agentId` is pinned (no
-  config file / no `AGENT_ID`), the daemon used to fall back to a fresh random
-  `agent-<rand>` on every start. Because the signing keys are filed under
-  `identity-<agentId>.json`, a changing id rotated the signing key and thus the
-  `keyId` fingerprint each restart, which broke every peer's TOFU trust pin and
-  forced a re-handshake — messages from the "new" identity were quarantined and
-  reported `delivered=0`. `loadConfig` now persists the auto-generated id to
-  `<storageDir>/agent-id` and reuses it, and defaults `waku.peerKeyPath` to
-  `<storageDir>/peer.key` so the libp2p peerId is likewise stable across restarts.
-
 ### Changed
 - **Node.js 22+ required** (`engines.node >=22`) — `@waku/sdk` requires it.
   CI now tests on Node 22 and 24.
@@ -123,6 +90,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/` guides: `TECHNICAL_SPECIFICATION.md`, `docs/ARCHITECTURE.md` (duplicate
   of `ARCHITECTURE.md`), `docs/SETUP.md`, plus internal debugging notes and
   one-off root test scripts.
+
+### Fixed
+- **Hermes: outbound messages never sent.** The adapter called
+  `cli.js send --no-sync`, an option `send` doesn't have, so every send failed.
+  It now queues the message in the daemon's outbox (`delivered=0`), which the
+  daemon drains every ~2 s and retries until Waku accepts it. It no longer
+  spawns a short-lived node per message, which could time out or lose
+  in-flight messages.
+- **`hermes-setup.sh` could leave `~/.hermes/config.yaml` unparseable.** It
+  inserted a fixed 4-space block after the first `platforms:` substring. It
+  now upserts under `gateway.platforms` or top-level `platforms` at the
+  existing indentation, parse-checks the result, and keeps a backup.
+- **Hermes plugin manifest**: add `kind: platform`, rename `required_env` →
+  `requires_env`, and enable the plugin (user plugins are opt-in in Hermes).
+- **`hermes-setup.sh` now installs `hivesync.service`**, the daemon the adapter
+  depends on.
+- **Hermes platform never connected.** The gateway calls
+  `connect(is_reconnect=...)`, and the adapter's `connect()` took no arguments,
+  so it failed on every attempt and retried forever. It now accepts the flag
+  and tears down the previous poll loop first, so a reconnect doesn't
+  deliver every message twice.
+- **Sends that reach 0 peers are no longer silently dropped** — the message is
+  persisted undelivered and retried by the outbox; `sendTextMessage` returns
+  `{ id, delivered }` and the CLI/MCP report "queued" instead of success.
+- **LightPush pacing** — outbound sends are serialized and spaced by
+  `waku.sendGapMs` (default 300 ms) so a backlog doesn't trip the public
+  fleet's rate limiting.
+- `openclaw-setup.sh` no longer crashes with "unbound variable" when run without
+  a `--password` argument; it no longer writes the removed `auth:` block, creates
+  `~/.config/systemd/user` if missing, and takes `TELEGRAM_CHAT_ID` from the
+  environment instead of hardcoding it.
+- Flaky `hooks.onMessage` integration test (#21) — assertions no longer depend
+  on the order two concurrently-spawned hook processes finish in.
+- **Stable agent identity across restarts** — when no `agentId` is pinned (no
+  config file / no `AGENT_ID`), the daemon used to fall back to a fresh random
+  `agent-<rand>` on every start. Because the signing keys are filed under
+  `identity-<agentId>.json`, a changing id rotated the signing key and thus the
+  `keyId` fingerprint each restart, which broke every peer's TOFU trust pin and
+  forced a re-handshake — messages from the "new" identity were quarantined and
+  reported `delivered=0`. `loadConfig` now persists the auto-generated id to
+  `<storageDir>/agent-id` and reuses it, and defaults `waku.peerKeyPath` to
+  `<storageDir>/peer.key` so the libp2p peerId is likewise stable across restarts.
 
 ## [2.0.0] - 2026-06-17
 

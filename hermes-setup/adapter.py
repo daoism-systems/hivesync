@@ -18,13 +18,15 @@ Configuration in config.yaml::
             poll_interval: 15
             allowed_users: []
             allow_all: false
+            ignore_auto: true   # never hand auto:true messages to Hermes (loop guard)
 
 Trust is established by the HiveSync daemon via a per-peer handshake the local
 user approves (`node dist/cli.js approve <agent-id>`); there is no password.
 
 Environment variables (override config.yaml):
     HIVESYNC_HOME, HIVESYNC_AGENT_ID, HIVESYNC_DB_PATH,
-    HIVESYNC_POLL_INTERVAL, HIVESYNC_ALLOWED_USERS, HIVESYNC_ALLOW_ALL_USERS
+    HIVESYNC_POLL_INTERVAL, HIVESYNC_ALLOWED_USERS, HIVESYNC_ALLOW_ALL_USERS,
+    HIVESYNC_IGNORE_AUTO
 """
 
 import asyncio
@@ -63,14 +65,14 @@ def _read_db(db_path, last_ts, our_agent):
         cur = conn.cursor()
         if last_ts:
             cur.execute(
-                "SELECT id, sender, recipient, content, timestamp "
+                "SELECT id, sender, recipient, content, timestamp, auto "
                 "FROM messages WHERE timestamp > ? AND sender != ? "
                 "ORDER BY timestamp ASC",
                 (last_ts, our_agent),
             )
         else:
             cur.execute(
-                "SELECT id, sender, recipient, content, timestamp "
+                "SELECT id, sender, recipient, content, timestamp, auto "
                 "FROM messages WHERE sender != ? "
                 "ORDER BY timestamp DESC LIMIT 1",
                 (our_agent,),
@@ -85,7 +87,7 @@ def _read_db(db_path, last_ts, our_agent):
         return []
 
 
-def _enqueue_hivesync(db_path, sender, recipient, message):
+def _enqueue_hivesync(db_path, sender, recipient, message, auto=False):
     """Queue a message in the HiveSync outbox for the long-lived daemon to send.
 
     The daemon (`hivesync start`) drains rows with sender=<us> AND delivered=0
@@ -102,10 +104,10 @@ def _enqueue_hivesync(db_path, sender, recipient, message):
         conn = sqlite3.connect(db_path, timeout=10)
         try:
             conn.execute(
-                "INSERT INTO messages (id, sender, recipient, type, content, timestamp, encrypted, delivered) "
-                "VALUES (?, ?, ?, 'text', ?, ?, ?, 0)",
+                "INSERT INTO messages (id, sender, recipient, type, content, timestamp, encrypted, delivered, auto) "
+                "VALUES (?, ?, ?, 'text', ?, ?, ?, 0, ?)",
                 (msg_id, sender, recipient, json.dumps({"text": message}), timestamp,
-                 0 if recipient == "broadcast" else 1),
+                 0 if recipient == "broadcast" else 1, 1 if auto else 0),
             )
             conn.commit()
         finally:
@@ -211,6 +213,14 @@ class HiveSyncAdapter(BasePlatformAdapter):
             if os.getenv("HIVESYNC_ALLOW_ALL_USERS")
             else extra.get("allow_all", False)
         )
+        # Loop guard (docs/agent-coordination-protocol.md): an auto:true message
+        # is itself an automated reply, and anything the gateway hands Hermes
+        # gets answered, so never hand those over.
+        self.ignore_auto = (
+            os.getenv("HIVESYNC_IGNORE_AUTO", "").lower() not in {"0", "false", "no"}
+            if os.getenv("HIVESYNC_IGNORE_AUTO")
+            else extra.get("ignore_auto", True)
+        )
         self.allowed_users = extra.get("allowed_users", [])
         self._allowed_set = {u.lower() for u in self.allowed_users if isinstance(u, str)}
         self._last_seen_ts = ""
@@ -265,7 +275,12 @@ class HiveSyncAdapter(BasePlatformAdapter):
             old = self._relayed_order.pop(0)
             self._relayed_ids.discard(old)
 
-    async def connect(self):
+    async def connect(self, *, is_reconnect: bool = False):
+        # The gateway calls connect(is_reconnect=...) on startup and on every
+        # reconnect. Tear down any previous poll loop first, or two loops run
+        # and every inbound message is delivered twice.
+        if is_reconnect or self._poll_task:
+            await self.disconnect()
         if not os.path.exists(self.db_path):
             logger.warning("HiveSync: DB not found at %s", self.db_path)
             return False
@@ -317,6 +332,11 @@ class HiveSyncAdapter(BasePlatformAdapter):
             if msg_id in self._relayed_ids:
                 self._advance_cursor(timestamp)
                 continue
+            if self.ignore_auto and row.get("auto"):
+                logger.debug("HiveSync: not relaying auto:true message %s from '%s'", msg_id, sender)
+                self._remember_relayed(msg_id)
+                self._advance_cursor(timestamp)
+                continue
             if not self._is_authorized(sender):
                 logger.info("HiveSync: unauthorized sender '%s' blocked", sender)
                 self._advance_cursor(timestamp)
@@ -352,8 +372,14 @@ class HiveSyncAdapter(BasePlatformAdapter):
             pass
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
+        # Hermes doesn't tell the adapter whether a send is automated. Treat an
+        # explicit metadata flag, or a reply to a message we relayed from the
+        # mesh, as automated (auto:true) so the peer won't auto-reply to it.
+        auto = bool((metadata or {}).get("auto")) or (
+            reply_to is not None and str(reply_to) in self._relayed_ids
+        )
         result = await asyncio.to_thread(
-            _enqueue_hivesync, self.db_path, self.agent_id, chat_id, content
+            _enqueue_hivesync, self.db_path, self.agent_id, chat_id, content, auto
         )
         if result.get("success"):
             return SendResult(success=True, message_id=result.get("message_id"))
