@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Published to npm as `@daoism-systems/hivesync`** (`npm i -g
+  @daoism-systems/hivesync`), with provenance. Releases publish from CI on
+  `v*` tags. `hivesync update` on an npm install now points at
+  `npm i -g @daoism-systems/hivesync@latest` instead of failing on git.
 - **Relay-hub mode** (`waku.mode: relay`) and the `hivesync hub` command — every
   agent dials one reachable hub to form a private GossipSub mesh, for small
   groups behind NAT/proxies where the public fleet won't accept publishes.

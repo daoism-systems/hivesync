@@ -1,5 +1,5 @@
 import { Skill, Context, Response } from 'openclaw-sdk';
-import { BridgeManager } from 'hivesync';
+import { BridgeManager } from '@daoism-systems/hivesync';
 import { loadConfig } from 'hivesync/dist/utils/config';
 
 export class WakuBridgeSkill extends Skill {

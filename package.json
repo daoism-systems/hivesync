@@ -1,5 +1,5 @@
 {
-  "name": "hivesync",
+  "name": "@daoism-systems/hivesync",
   "version": "2.0.0",
   "description": "P2P communication tool for AI agents (OpenClaw, Hermes, etc.) using the Waku protocol",
   "main": "dist/index.js",
@@ -30,7 +30,7 @@
     "agent",
     "communication"
   ],
-  "author": "HiveSync Contributors",
+  "author": "Daoism Systems",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -40,6 +40,10 @@
     "url": "https://github.com/daoism-systems/hivesync/issues"
   },
   "homepage": "https://github.com/daoism-systems/hivesync#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "@chainsafe/libp2p-gossipsub": "^14.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
