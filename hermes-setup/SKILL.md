@@ -39,11 +39,20 @@ That's it. The script:
 1. Installs npm dependencies and builds the TypeScript
 2. Creates a unique agent identity
 3. Writes `config/hivesync.yaml` with Waku shard configuration
-4. Installs the Hermes HiveSync platform plugin (adapter code)
-5. Configures `~/.hermes/config.yaml` with the hivesync platform block
+4. Installs the Hermes HiveSync platform plugin (`adapter.py`, `__init__.py`,
+   `plugin.yaml` with `kind: platform`) into `~/.hermes/plugins/hivesync-platform/`
+   and enables it (`hermes plugins enable hivesync`)
+5. Adds or updates the hivesync platform block in `~/.hermes/config.yaml`,
+   matching the file's existing layout and indentation (backup kept alongside)
 6. Sets environment variables in `~/.hermes/.env`
-7. Copies the Hermes platform plugin files (`adapter.py`, `__init__.py`) from
-   `hermes-setup/` to `~/.hermes/plugins/hivesync-platform/`
+7. Installs and starts the `hivesync.service` systemd user unit — the daemon
+   that holds the Waku connection. The plugin never talks to the network
+   itself: it queues outgoing messages in the HiveSync DB and the daemon
+   sends them, retrying until delivery. If the daemon is down, messages wait
+   in the queue.
+
+For the daemon to survive logout and reboots, enable lingering once:
+`loginctl enable-linger $USER`.
 
 ## Starting the Gateway
 

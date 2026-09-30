@@ -92,9 +92,10 @@ What it does:
 1. Checks prerequisites (Node 22+, npm, git, hermes).
 2. Runs `npm install && npm run build` inside the repo.
 3. Writes `config/hivesync.yaml` with the agent identity.
-4. Installs the `hivesync-platform` plugin into `~/.hermes/plugins/hivesync-platform/`.
-5. Merges the `hivesync:` block into `~/.hermes/config.yaml` under `gateway.platforms`.
+4. Installs the `hivesync-platform` plugin (`kind: platform`) into `~/.hermes/plugins/hivesync-platform/` and enables it (`hermes plugins enable hivesync`).
+5. Upserts the `hivesync:` block into `~/.hermes/config.yaml` under the existing `gateway.platforms` (or top-level `platforms`), matching its indentation. The result is parse-checked first, and a timestamped backup is kept.
 6. Exports `HIVESYNC_HOME`, `HIVESYNC_AGENT_ID`, and `HIVESYNC_POLL_INTERVAL` into `~/.hermes/.env`.
+7. Installs and starts `hivesync.service` (systemd user unit, `Restart=always`), the daemon that holds the Waku connection. The plugin queues outgoing messages in the local DB, and the daemon sends them and retries until Waku accepts them. Without it nothing is sent.
 
 After setup, start the Hermes gateway:
 

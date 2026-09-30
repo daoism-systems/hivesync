@@ -32,8 +32,8 @@ import json
 import logging
 import os
 import sqlite3
-import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -85,34 +85,32 @@ def _read_db(db_path, last_ts, our_agent):
         return []
 
 
-async def _send_hivesync(cli_path, recipient, message):
-    """Send a message via the HiveSync CLI."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "node", cli_path, "send", "--no-sync", recipient, message,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(Path(cli_path).parent.parent),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return {"success": False, "error": "CLI timeout (60s)"}
+def _enqueue_hivesync(db_path, sender, recipient, message):
+    """Queue a message in the HiveSync outbox for the long-lived daemon to send.
 
-        if proc.returncode == 0:
-            output = stdout.decode().strip()
-            for line in output.splitlines():
-                if "Message sent! ID:" in line:
-                    msg_id = line.split("ID:")[-1].strip()
-                    return {"success": True, "message_id": msg_id}
-            return {"success": True, "message_id": str(int(time.time() * 1000))}
-        else:
-            err = stderr.decode().strip() or stdout.decode().strip()
-            return {"success": False, "error": err}
-    except FileNotFoundError:
-        return {"success": False, "error": "node not found"}
+    The daemon (`hivesync start`) drains rows with sender=<us> AND delivered=0
+    every ~2s and retries until Waku accepts them (BridgeManager.processOutbox).
+    Spawning the CLI per message instead starts a second short-lived libp2p
+    node, blocks for a full sync round, and loses the message if that process
+    dies mid-retry.
+    """
+    if not os.path.exists(db_path):
+        return {"success": False, "error": f"HiveSync DB not found at {db_path} (is the daemon running?)"}
+    msg_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            conn.execute(
+                "INSERT INTO messages (id, sender, recipient, type, content, timestamp, encrypted, delivered) "
+                "VALUES (?, ?, ?, 'text', ?, ?, ?, 0)",
+                (msg_id, sender, recipient, json.dumps({"text": message}), timestamp,
+                 0 if recipient == "broadcast" else 1),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"success": True, "message_id": msg_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -354,7 +352,9 @@ class HiveSyncAdapter(BasePlatformAdapter):
             pass
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
-        result = await _send_hivesync(self.cli_path, chat_id, content)
+        result = await asyncio.to_thread(
+            _enqueue_hivesync, self.db_path, self.agent_id, chat_id, content
+        )
         if result.get("success"):
             return SendResult(success=True, message_id=result.get("message_id"))
         return SendResult(success=False, error=result.get("error", "Unknown error"))
