@@ -230,6 +230,9 @@ export class BridgeManager extends EventEmitter {
 
         try {
           await this.hivesync.sendMessage({
+            // Reuse the outbox row id on the wire so the recipient stores it
+            // under the same id the adapter logged.
+            id: message.id,
             sender: this.config.agentId,
             recipient: message.recipient,
             type: message.type,
@@ -295,6 +298,12 @@ export class BridgeManager extends EventEmitter {
       const status = message.content?.status ?? 'queued';
       const senderStatus = message.content?.senderStatus;
       logger.debug(`ACK (${status}) from ${message.sender} for ${originalMessageId}`);
+      if (status === 'undecryptable') {
+        logger.warn(
+          `${message.sender} could not decrypt message ${originalMessageId} and dropped it — ` +
+            `our pinned key for ${message.sender} likely doesn't match theirs; re-handshake`
+        );
+      }
       // Surface delivery receipts so UIs / autoreply drivers can show a
       // "delivered"/"processed" marker and apply backpressure on 'deferred'.
       if (originalMessageId) {
