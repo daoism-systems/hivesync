@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as nodePath from 'path';
 import { BridgeManager } from '../../src/core/bridge-manager';
 import { InMemoryTransport } from '../../src/core/transport';
+import { generateEncryptionKeyPair } from '../../src/core/crypto';
 import { BridgeConfig, MessageType } from '../../src/types';
 
 const TOPIC = '/hivesync-test/1/integration/proto';
@@ -289,6 +290,41 @@ describe('BridgeManager communication (in-memory transport)', () => {
     } finally {
       await flooder.stop();
       await capped.stop();
+    }
+  }, 25000);
+
+  test('a message encrypted to a stale key pin comes back as an undecryptable ACK', async () => {
+    const UD_TOPIC = '/hivesync-test/1/undecryptable/proto';
+    const senderCfg = makeConfig('ud-alpha', 'UD Alpha');
+    senderCfg.waku.contentTopic = UD_TOPIC;
+    const receiverCfg = makeConfig('ud-beta', 'UD Beta');
+    receiverCfg.waku.contentTopic = UD_TOPIC;
+    const sender = new BridgeManager(senderCfg, new InMemoryTransport(UD_TOPIC, 'ud-alpha'));
+    const receiver = new BridgeManager(receiverCfg, new InMemoryTransport(UD_TOPIC, 'ud-beta'));
+
+    try {
+      await sender.start();
+      await receiver.start();
+      await establishTrust(sender, receiver, 'ud-alpha', 'ud-beta');
+
+      // Simulate the receiver having rotated its encryption key: the sender's
+      // pin now points at a key the receiver doesn't hold.
+      const pinned = (sender as any).hivesync.knownAgents.get('ud-beta');
+      pinned.encPublicKey = generateEncryptionKeyPair().publicKey;
+
+      const acks: string[] = [];
+      sender.on('ack', (r: { status?: string }) => acks.push(r.status ?? ''));
+
+      await sender.sendTextMessage('ud-beta', 'sealed to the wrong key');
+
+      expect(await waitFor(() => acks.includes('undecryptable'), 3000)).toBe(true);
+      const stored = (await receiver.getConversation('ud-alpha')).filter(
+        (m) => m.content.text === 'sealed to the wrong key'
+      );
+      expect(stored).toHaveLength(0);
+    } finally {
+      await sender.stop();
+      await receiver.stop();
     }
   }, 25000);
 
