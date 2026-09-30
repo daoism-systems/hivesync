@@ -197,6 +197,46 @@ describe('StorageManager', () => {
     });
   });
 
+  describe('Delivery receipts', () => {
+    const outbound = (id: string): Message => ({
+      id,
+      sender: 'me',
+      recipient: 'peer',
+      type: MessageType.TEXT,
+      content: { text: 'hi' },
+      timestamp: new Date(),
+      encrypted: true,
+    });
+
+    test('a new message has no receipt until the recipient ACKs it', async () => {
+      await storage.saveMessage(outbound('r-1'));
+      expect((await storage.getMessage('r-1'))!.ackStatus).toBeUndefined();
+      expect(await storage.recordAck('r-1', 'peer', 'queued')).toBe(true);
+      const m = await storage.getMessage('r-1');
+      expect(m!.ackStatus).toBe('queued');
+      expect(m!.ackedAt).toBeInstanceOf(Date);
+    });
+
+    test('only the message recipient can ACK it', async () => {
+      await storage.saveMessage(outbound('r-2'));
+      expect(await storage.recordAck('r-2', 'someone-else', 'processed')).toBe(false);
+      expect((await storage.getMessage('r-2'))!.ackStatus).toBeUndefined();
+    });
+
+    test('a late weaker receipt never masks a stronger one', async () => {
+      await storage.saveMessage(outbound('r-3'));
+      await storage.recordAck('r-3', 'peer', 'rejected');
+      expect(await storage.recordAck('r-3', 'peer', 'queued')).toBe(false);
+      expect(await storage.recordAck('r-3', 'peer', 'processed')).toBe(false);
+      expect((await storage.getMessage('r-3'))!.ackStatus).toBe('rejected');
+
+      await storage.saveMessage(outbound('r-4'));
+      await storage.recordAck('r-4', 'peer', 'queued');
+      expect(await storage.recordAck('r-4', 'peer', 'processed')).toBe(true);
+      expect((await storage.getMessage('r-4'))!.ackStatus).toBe('processed');
+    });
+  });
+
   describe('Robustness', () => {
     test('should ignore duplicate message ids (network redelivery)', async () => {
       const msg: Message = {

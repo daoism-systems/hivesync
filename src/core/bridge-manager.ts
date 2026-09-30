@@ -10,12 +10,17 @@ import { Transport } from './transport';
 import { StorageManager } from '../storage/storage-manager';
 import { QuarantineStore } from '../storage/quarantine-store';
 import { RealTimeSyncManager } from '../sync/real-time-sync';
-import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage, Contact, HandshakeApproval } from '../types';
+import { BridgeConfig, AgentIdentity, AckStatus, Message, MessageType, QuarantinedMessage, Contact, HandshakeApproval } from '../types';
 import { HandshakeInfo } from './hivesync-bridge';
 import { logger } from '../utils/logger';
 
 // How often the outbox poller checks the DB for messages to push over Waku.
 const OUTBOX_POLL_INTERVAL_MS = 2000;
+
+/** Receipt statuses we persist; anything else a peer sends is ignored. */
+const ACK_STATUSES = new Set<string>([
+  'queued', 'deferred', 'processed', 'rejected', 'rate_limited', 'undecryptable',
+]);
 
 // How often we poll the DB for handshake approvals recorded by the CLI/UI.
 const APPROVAL_POLL_INTERVAL_MS = 3000;
@@ -312,6 +317,14 @@ export class BridgeManager extends EventEmitter {
             `our pinned key for ${message.sender} likely doesn't match theirs; re-handshake`
         );
       }
+      // Persist the receipt on our outbound row so agents and adapters can see
+      // it (read_conversation / message_status / the ack_status column) —
+      // "published" alone says nothing about whether the peer ingested it.
+      if (originalMessageId && ACK_STATUSES.has(status)) {
+        await this.storage
+          .recordAck(originalMessageId, message.sender, status as AckStatus)
+          .catch((e) => logger.debug(`Failed to record ACK for ${originalMessageId}:`, e));
+      }
       // Surface delivery receipts so UIs / autoreply drivers can show a
       // "delivered"/"processed" marker and apply backpressure on 'deferred'.
       if (originalMessageId) {
@@ -530,6 +543,11 @@ export class BridgeManager extends EventEmitter {
   }
 
   /** Full text conversation (both directions) with one agent, oldest first. */
+  /** One stored message by id (including its delivery receipt, if any). */
+  async getMessage(id: string): Promise<Message | null> {
+    return this.storage.getMessage(id);
+  }
+
   async getConversation(peerId: string, limit = 500): Promise<Message[]> {
     return this.storage.getConversation(peerId, this.config.agentId, limit);
   }

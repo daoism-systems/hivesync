@@ -29,6 +29,12 @@ export interface Message {
    * docs/agent-coordination-protocol.md.
    */
   auto?: boolean;
+  /**
+   * Latest delivery receipt the recipient sent back for this (outbound)
+   * message, if any. Absent = no receipt yet: published is not delivered.
+   */
+  ackStatus?: AckStatus;
+  ackedAt?: Date;
 }
 
 /** Delivery-receipt status carried in a MessageType.ACK payload. */

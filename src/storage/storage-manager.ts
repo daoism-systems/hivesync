@@ -1,7 +1,21 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import { v4 as uuidv4 } from 'uuid';
-import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus, HandshakeApproval } from '../types';
+import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus, HandshakeApproval, AckStatus } from '../types';
+
+/**
+ * Receipt strength. `queued` < `deferred` < a final outcome. Terminal failures
+ * outrank `processed` so a problem is never hidden behind an earlier success
+ * receipt for the same id.
+ */
+const ACK_RANK: Record<AckStatus, number> = {
+  queued: 1,
+  deferred: 2,
+  processed: 3,
+  rate_limited: 4,
+  rejected: 4,
+  undecryptable: 4,
+};
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -131,6 +145,13 @@ export class StorageManager {
     if (!names.has('auto')) {
       await this.db.exec(`ALTER TABLE messages ADD COLUMN auto INTEGER DEFAULT 0`);
     }
+    // Delivery receipts written back onto the outbound row (see recordAck).
+    if (!names.has('ack_status')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN ack_status TEXT`);
+    }
+    if (!names.has('acked_at')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN acked_at TEXT`);
+    }
   }
 
   /** Add handshake columns to a pre-existing agents table (idempotent). */
@@ -185,7 +206,33 @@ export class StorageManager {
       encrypted: row.encrypted === 1,
       signature: row.signature || undefined,
       auto: row.auto === 1,
+      ...(row.ack_status ? { ackStatus: row.ack_status, ackedAt: new Date(row.acked_at) } : {}),
     };
+  }
+
+  async getMessage(id: string): Promise<Message | null> {
+    const row = await this.db.get(`SELECT * FROM messages WHERE id = ?`, [id]);
+    return row ? this.rowToMessage(row) : null;
+  }
+
+  /**
+   * Record a delivery receipt on the outbound message it acknowledges. Only the
+   * message's own recipient can ACK it. Receipts can arrive out of order or be
+   * redelivered, so a weaker status never overwrites a stronger one (a late
+   * 'queued' must not mask 'processed' or 'rejected'). Returns true if stored.
+   */
+  async recordAck(messageId: string, from: string, status: AckStatus): Promise<boolean> {
+    const row = await this.db.get(
+      `SELECT ack_status FROM messages WHERE id = ? AND recipient = ?`,
+      [messageId, from]
+    );
+    if (!row) return false;
+    if (row.ack_status && ACK_RANK[row.ack_status as AckStatus] > ACK_RANK[status]) return false;
+    await this.db.run(
+      `UPDATE messages SET ack_status = ?, acked_at = ? WHERE id = ?`,
+      [status, new Date().toISOString(), messageId]
+    );
+    return true;
   }
 
   async getMessages(limit: number = 100, offset: number = 0): Promise<Message[]> {

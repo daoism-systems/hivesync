@@ -20,9 +20,15 @@ import { logger } from './utils/logger';
 // eslint-disable-next-line @typescript-eslint/no-implied-eval
 const imp = (m: string): Promise<any> => new Function(`return import(${JSON.stringify(m)})`)();
 
-/** Slim, model-friendly projection of a stored message. */
-function slim(m: Message): Record<string, unknown> {
+/**
+ * Slim, model-friendly projection of a stored message. For our own outbound
+ * messages (`self` given) it carries the delivery receipt: the peer's last ACK
+ * status, or 'none' — published is not the same as received.
+ */
+function slim(m: Message, self?: string): Record<string, unknown> {
+  const outbound = self !== undefined && m.sender === self && m.recipient !== 'broadcast';
   return {
+    id: m.id,
     from: m.sender,
     to: m.recipient,
     text: (m.content as any)?.text ?? m.content,
@@ -31,6 +37,9 @@ function slim(m: Message): Record<string, unknown> {
     // Automated message: do NOT auto-reply to this (an ACK receipt is fine).
     // Only present when true, to keep the common case uncluttered.
     ...(m.auto ? { auto: true } : {}),
+    ...(outbound
+      ? { receipt: m.ackStatus ?? 'none', ...(m.ackedAt ? { receipt_at: m.ackedAt.toISOString() } : {}) }
+      : {}),
   };
 }
 
@@ -121,7 +130,10 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
           `the outbox retries every few seconds). Check health for peer count before assuming delivery.`
         );
       }
-      return text(`Sent message ${id} to ${agent_id} (${security}${auto ? ', auto' : ''}).`);
+      return text(
+        `Sent message ${id} to ${agent_id} (${security}${auto ? ', auto' : ''}). ` +
+          `Published, not yet confirmed received — check message_status for the peer's receipt.`
+      );
     })
   );
 
@@ -149,7 +161,26 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
     },
     ready_(async ({ agent_id, limit }: { agent_id: string; limit?: number }) => {
       const msgs = await bridge.getConversation(agent_id, limit ?? 50);
-      return json(msgs.map(slim));
+      return json(msgs.map((m) => slim(m, config.agentId)));
+    })
+  );
+
+  // --- delivery receipt for one message --------------------------------------
+  server.registerTool(
+    'message_status',
+    {
+      title: 'Delivery status of a message',
+      description:
+        'Delivery receipt for a message you sent, by id (as returned by send_message). receipt is the ' +
+        "peer's last ACK: queued (received), processed, deferred (busy, retry later), rejected (unknown " +
+        'type / refused), undecryptable (key mismatch: re-handshake), rate_limited — or none (published, ' +
+        'but no receipt yet: the peer may be offline or never got it).',
+      inputSchema: { message_id: z.string().describe('message id') },
+    },
+    ready_(async ({ message_id }: { message_id: string }) => {
+      const m = await bridge.getMessage(message_id);
+      if (!m) return text(`No message ${message_id} in the local store.`);
+      return json(slim(m, config.agentId));
     })
   );
 
@@ -161,7 +192,7 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       description: 'Return messages received but not yet read (across all agents). Poll this to see new incoming messages.',
       inputSchema: {},
     },
-    ready_(async () => json((await bridge.getUnreadMessages()).map(slim)))
+    ready_(async () => json((await bridge.getUnreadMessages()).map((m) => slim(m))))
   );
 
   // --- handshake approval ----------------------------------------------------
@@ -204,7 +235,7 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('HiveSync MCP server ready on stdio (tools: health, list_contacts, send_message, broadcast, read_conversation, get_unread, approve_handshake, deny_handshake, list_quarantine)');
+  logger.info('HiveSync MCP server ready on stdio (tools: health, list_contacts, send_message, broadcast, read_conversation, get_unread, approve_handshake, deny_handshake, list_quarantine, message_status)');
 
   const shutdown = async (): Promise<void> => {
     await bridge.stop().catch(() => undefined);

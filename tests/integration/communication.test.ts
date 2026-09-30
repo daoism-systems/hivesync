@@ -388,6 +388,12 @@ describe('BridgeManager communication (in-memory transport)', () => {
 
       expect(await waitFor(() => acks.includes('rejected'), 3000)).toBe(true);
       expect(acks).not.toContain('queued');
+
+      // A normal text gets a 'queued' receipt persisted on the sender's row.
+      const { id } = await a.sendTextMessage('ut-beta', 'this one is handled');
+      expect(
+        await waitFor(async () => (await a.getMessage(id))?.ackStatus === 'queued', 3000)
+      ).toBe(true);
     } finally {
       await a.stop();
       await b.stop();
