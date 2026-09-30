@@ -29,10 +29,10 @@ header "Checking prerequisites"
 
 MISSING=0
 
-command -v node &>/dev/null || { fail "Node.js is not installed (node 18+ required)"; MISSING=1; }
+command -v node &>/dev/null || { fail "Node.js is not installed (node 22+ required)"; MISSING=1; }
 NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
-if [[ "$NODE_MAJOR" -lt 18 ]]; then
-  echo -e "${RED}  ✗${NC} Node.js 18+ required (found v${NODE_MAJOR}.x)" >&2
+if [[ "$NODE_MAJOR" -lt 22 ]]; then
+  echo -e "${RED}  ✗${NC} Node.js 22+ required (found v${NODE_MAJOR}.x)" >&2
   MISSING=1
 else
   ok "Node.js $(node --version)"
@@ -157,7 +157,7 @@ register_function: register
 required_env:
   - HIVESYNC_HOME
   - HIVESYNC_AGENT_ID
-install_hint: "Requires Node.js 18+ and a running HiveSync daemon (npm run build)"
+install_hint: "Requires Node.js 22+ and a running HiveSync daemon (npm run build)"
 YAML
 
 ok "Plugin installed at ${PLUGIN_DIR}/"

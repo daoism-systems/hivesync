@@ -1,84 +1,52 @@
-# OpenClaw Waku Bridge Skill
+# HiveSync OpenClaw Skill
 
-This skill enables OpenClaw to communicate with other agents using the Waku Bridge.
+A small OpenClaw skill (`waku-bridge`) that drives a HiveSync `BridgeManager`
+from natural-language commands.
 
-## Features
+> **Setting up OpenClaw with HiveSync?** Use [`openclaw-setup.sh`](../openclaw-setup.sh)
+> from the repo root instead — it builds HiveSync, writes the daemon config,
+> installs the [hivesync-openclaw-plugin](https://github.com/clawbotl37/hivesync-openclaw-plugin)
+> channel, and sets up the systemd services. For event-driven wake-ups on
+> incoming messages, see `hooks.onMessage` and [`scripts/on-message.sh`](../scripts/on-message.sh).
 
-- **Secure Communication**: End-to-end encrypted messaging between agents
-- **Obsidian Sync**: Automatic synchronization of Obsidian vaults
-- **Multi-Agent**: Communicate with multiple agents simultaneously
-- **Real-time**: Instant message delivery over Waku network
+This directory is not published to any registry; build it locally against a
+built HiveSync checkout.
 
-## Installation
+## Build
 
 ```bash
-# Install the skill
-openclaw install openclaw-waku-bridge
+# from the repo root
+npm install && npm run build
 
-# Or install from local development
-cd /path/to/waku-bridge/openclaw-skill
+cd openclaw-skill
 npm install
 npm run build
 ```
 
 ## Configuration
 
-1. Run the setup wizard:
-```bash
-waku-bridge setup
-```
+Run the HiveSync setup wizard once (`node dist/cli.js setup` from the repo
+root), then enable the skill in OpenClaw:
 
-2. Update OpenClaw configuration to include the skill:
 ```yaml
 skills:
   - name: waku-bridge
     enabled: true
     config:
       agentId: "your-agent-id"
-      storagePath: "/path/to/storage.db"
+      storagePath: "/path/to/hivesync/data/hivesync.db"
 ```
 
-## Usage Examples
+## Commands
 
-### Voice/Text Commands
+The skill matches on keywords in the user's text:
 
-- "Check Waku bridge status"
+- "Check bridge status"
 - "Send message to agent-alpha Hello there!"
 - "Sync my Obsidian notes"
+- "List agents"
 - "Check for new messages"
-- "List connected agents"
-
-### API Usage
-
-```typescript
-import { createSkill } from 'openclaw-waku-bridge';
-
-const skill = createSkill();
-await skill.initialize();
-
-// The skill will automatically handle commands via OpenClaw
-```
-
-## Integration with Waku Bridge
-
-This skill uses the main Waku Bridge library to provide:
-- Message routing and delivery
-- Obsidian vault synchronization
-- Agent discovery and management
-- Secure encryption
-
-## Development
-
-```bash
-# Build the skill
-npm run build
-
-# Run in development mode
-npm run dev
-
-# Run tests
-npm test
-```
+- "Help"
 
 ## License
 

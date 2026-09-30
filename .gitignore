@@ -22,7 +22,7 @@ logs/
 *.log
 *.pid
 
-# Local config (may contain access-control password hash) & setup marker
+# Local config & setup marker
 config/
 .setup-complete
 

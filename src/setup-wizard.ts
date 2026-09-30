@@ -205,7 +205,7 @@ This vault is automatically synchronized with your other agents using HiveSync.
 - All \`.md\` files are automatically synced
 
 ## Support
-For help, visit: https://github.com/clawbotl37/hivesync`;
+For help, visit: https://github.com/daoism-systems/hivesync`;
       
       fs.writeFileSync(
         path.join(answers.obsidianPath, 'Welcome to HiveSync.md'),
