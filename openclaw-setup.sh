@@ -3,7 +3,10 @@
 # HiveSync OpenClaw Setup — one-command integration with OpenClaw Agent
 #
 # Usage:
-#   bash openclaw-setup.sh [agent-name] [--password <password>]
+#   bash openclaw-setup.sh [agent-name]
+#
+# Optional env:
+#   TELEGRAM_CHAT_ID  forward bridge notifications to this Telegram chat
 #
 # Idempotent: safe to re-run; skips unchanged steps.
 # =============================================================================
@@ -27,9 +30,9 @@ header(){ echo -e "\n${BOLD}${CYAN}══ $1 ══${NC}\n"; }
 header "Checking prerequisites"
 
 MISSING=0
-command -v node &>/dev/null || { fail "Node.js 18+ required"; MISSING=1; }
+command -v node &>/dev/null || { fail "Node.js 22+ required"; MISSING=1; }
 NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>/dev/null || echo 0)
-[[ "$NODE_MAJOR" -lt 18 ]] && fail "Node.js 18+ required (found v${NODE_MAJOR}.x)"
+[[ "$NODE_MAJOR" -lt 22 ]] && fail "Node.js 22+ required (found v${NODE_MAJOR}.x)"
 ok "Node.js $(node --version)"
 
 command -v npm &>/dev/null || fail "npm not found"
@@ -64,36 +67,6 @@ info "npm run build..."
 npm run build 2>/dev/null
 ok "Build complete — dist/cli.js ready"
 
-# ── 4. Generate credentials ─────────────────────────────────────────────────
-header "Generating credentials"
-
-# Check for --password flag
-CUSTOM_PW=""
-if [[ "$2" == "--password" && -n "$3" ]]; then
-  CUSTOM_PW="$3"
-fi
-
-if [[ -n "$CUSTOM_PW" ]]; then
-  PASSWORD="$CUSTOM_PW"
-  info "Using provided password"
-else
-  PASSWORD=$(node -e "
-    const c = require('crypto');
-    let s = '';
-    while (s.length < 32) s += c.randomBytes(32).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
-    process.stdout.write(s.slice(0, 32));
-  ")
-  info "Generated new 32-char password"
-fi
-SCRYPT_SALT=$(node -e "const c=require('crypto');process.stdout.write(c.randomBytes(16).toString('base64'))")
-SCRYPT_HASH=$(node -e "
-  const c=require('crypto');
-  const p=Buffer.from('${PASSWORD}','utf-8');
-  const s=Buffer.from('${SCRYPT_SALT}','base64');
-  process.stdout.write(c.scryptSync(p,s,32).toString('base64'));
-")
-ok "Password generated + scrypt hash computed"
-
 # ── 5. Write HiveSync daemon config ──────────────────────────────────────────
 header "Writing HiveSync daemon config"
 
@@ -115,11 +88,6 @@ agentId: ${AGENT_ID}
 agentName: "${AGENT_NAME}"
 storagePath: ${REPO_DIR}/data/hivesync.db
 syncInterval: 30
-
-auth:
-  salt: "${SCRYPT_SALT}"
-  hash: "${SCRYPT_HASH}"
-  autoReply: "✓ received"
 
 waku:
   listenAddresses:
@@ -217,6 +185,8 @@ fi
 # ── 9. Configure systemd services ───────────────────────────────────────────
 header "Setting up systemd services"
 
+mkdir -p "${HOME}/.config/systemd/user"
+
 # Daemon service (hivesync.service)
 cat > "${HOME}/.config/systemd/user/hivesync.service" << SERVICEEOF
 [Unit]
@@ -251,7 +221,7 @@ WorkingDirectory=${BRIDGE_DIR}
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
-Environment=TELEGRAM_CHAT_ID=738354370
+Environment=TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 Environment=MY_AGENT_ID=${AGENT_ID}
 Environment=POLL_INTERVAL_MS=5000
 StandardOutput=journal
@@ -298,7 +268,6 @@ echo -e "${BOLD}${GREEN}  HiveSync + OpenClaw setup complete!${NC}"
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${BOLD}Agent ID :${NC}  ${AGENT_ID}"
-echo -e "  ${BOLD}Password :${NC}  ${PASSWORD}"
 echo -e "  ${BOLD}Config   :${NC}  ${CONFIG_FILE}"
 echo ""
 echo -e "  ${CYAN}Trust model (handshake approval):${NC}"

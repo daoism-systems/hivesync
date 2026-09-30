@@ -345,7 +345,13 @@ describe('BridgeManager communication (in-memory transport)', () => {
         // ACKs each send generates flow back to the SENDER, whose config has
         // no hook; the receiver only sees the two TEXTs).
         expect(lines).toHaveLength(2);
-        const [manual, auto] = lines;
+        // Each message spawns its own hook process, so the two appends can land
+        // in either order — match lines by content, not position (#21).
+        const byText = (t: string) => lines.find((l) => l.stdin.content.text === t);
+        const manual = byText('wake up, brain');
+        const auto = byText('automated one');
+        expect(manual).toBeDefined();
+        expect(auto).toBeDefined();
         expect(manual.from).toBe('hk-alpha');
         expect(manual.type).toBe('text');
         expect(manual.auto).toBe('0');
@@ -353,7 +359,6 @@ describe('BridgeManager communication (in-memory transport)', () => {
         expect(auto.auto).toBe('1');
         expect(auto.stdin.content.text).toBe('automated one');
       } finally {
-        delete process.env.HOOK_OUT;
         await sender.stop();
         await receiver.stop();
       }
