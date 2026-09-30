@@ -380,7 +380,13 @@ export class HiveSync {
 
     const handler = this.messageHandlers.get(message.type);
     if (handler) {
-      await handler(message);
+      // A handler failure must not escape: this runs inside transport
+      // callbacks (filter/store), where an uncaught error kills the process.
+      try {
+        await handler(message);
+      } catch (error) {
+        logger.error(`Handler for ${message.type} ${message.id} from ${message.sender} failed:`, error);
+      }
     }
 
     // ACK directed messages only (avoids broadcast ACK storms).

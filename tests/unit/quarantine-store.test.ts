@@ -60,4 +60,13 @@ describe('QuarantineStore', () => {
     expect(await store.count()).toBe(0);
     expect(await store.list()).toEqual([]);
   });
+
+  test('re-adding a redelivered message is a no-op, not an EACCES crash', async () => {
+    // Store backfill redelivers the same message on every restart; the first
+    // copy is read-only, so a rewrite used to throw and kill the MCP server.
+    const m = msg({ timestamp: new Date('2026-09-30T12:45:42.143Z') });
+    const first = await store.add(m, 'untrusted');
+    await expect(store.add(m, 'untrusted')).resolves.toBe(first);
+    expect(await store.count()).toBe(1);
+  });
 });

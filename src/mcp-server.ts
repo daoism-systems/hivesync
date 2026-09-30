@@ -212,4 +212,9 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
   };
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
+  // The client closing stdio means it's gone (crashed, or killed without
+  // signalling us). Without this the node lingers as an orphan still holding
+  // our identity, peerId and DB — a duplicate agent racing the next session.
+  process.stdin.on('end', () => void shutdown());
+  process.stdin.on('close', () => void shutdown());
 }

@@ -34,6 +34,11 @@ export class QuarantineStore {
     const ts = new Date(message.timestamp).toISOString().replace(/[:.]/g, '-');
     const file = path.join(this.dir, `${ts}_${sanitize(message.sender)}_${message.id.slice(0, 8)}.json`);
 
+    // Store backfill redelivers recent traffic on every restart. The file name
+    // is derived from the message, so an existing file means it's already
+    // quarantined — and it's read-only, so rewriting it would throw EACCES.
+    if (fs.existsSync(file)) return file;
+
     const record: QuarantinedMessage = {
       id: message.id,
       sender: message.sender,
