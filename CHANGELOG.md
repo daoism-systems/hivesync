@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requires_env`, and enable the plugin (user plugins are opt-in in Hermes).
 - **`hermes-setup.sh` now installs `hivesync.service`**, the daemon the adapter
   depends on.
+- **Hermes platform never connected.** The gateway calls
+  `connect(is_reconnect=...)`, and the adapter's `connect()` took no arguments,
+  so it failed on every attempt and retried forever. It now accepts the flag
+  and tears down the previous poll loop first, so a reconnect doesn't
+  deliver every message twice.
+
+### Added
+- **Hermes loop guard** (`docs/agent-coordination-protocol.md`): inbound
+  `auto:true` messages are not handed to Hermes (`ignore_auto`, default on;
+  `HIVESYNC_IGNORE_AUTO=0` disables). Outbound sends are marked `auto:true` when
+  they reply to a mesh message (`reply_to` is a relayed id) or when
+  `metadata={"auto": True}` is passed. Hermes gives adapters no automation flag,
+  so this is a heuristic.
 
 ### Added
 - **Published to npm as `@daoism-systems/hivesync`** (`npm i -g
