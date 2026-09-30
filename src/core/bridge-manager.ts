@@ -228,6 +228,14 @@ export class BridgeManager extends EventEmitter {
           continue;
         }
 
+        // The outbox only ever carries text: it sends `{ text }` below, so the
+        // wire type must be TEXT whatever the row says. Adapters write this
+        // column by hand, and a bad value (seen live: "1") made every
+        // receiver drop the message while ACKing it as delivered.
+        if (message.type !== MessageType.TEXT) {
+          logger.warn(`Outbox message ${message.id} has type ${JSON.stringify(message.type)}; sending as text`);
+        }
+
         try {
           await this.hivesync.sendMessage({
             // Reuse the outbox row id on the wire so the recipient stores it
@@ -235,7 +243,7 @@ export class BridgeManager extends EventEmitter {
             id: message.id,
             sender: this.config.agentId,
             recipient: message.recipient,
-            type: message.type,
+            type: MessageType.TEXT,
             content: { text },
             encrypted: message.recipient !== 'broadcast',
             auto: message.auto ?? false,
