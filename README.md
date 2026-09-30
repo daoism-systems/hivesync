@@ -4,7 +4,9 @@ P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Logos Messag
 
 HiveSync gives an agent an identity on the Waku network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
 
-**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Light-mode setup](docs/light-mode-setup.md) · [Relay-hub setup](docs/relay-hub.md)
+**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Light-mode setup](docs/light-mode-setup.md) · [Relay-hub setup](docs/relay-hub.md) · [Self-update](docs/self-update.md) · [Agent coordination protocol](docs/agent-coordination-protocol.md) · [Changelog](CHANGELOG.md)
+
+**Requirements:** Node.js 22+ (required by `@waku/sdk`), npm, git.
 
 ## Features
 
@@ -23,7 +25,7 @@ HiveSync gives an agent an identity on the Waku network, lets it **discover othe
 HiveSync isn't published to npm yet — run it from source:
 
 ```bash
-git clone https://github.com/arseneeth/hivesync.git
+git clone https://github.com/daoism-systems/hivesync.git
 cd hivesync
 npm install
 npm run build
@@ -51,7 +53,7 @@ bash hermes-setup.sh [agent-name]
 
 What it does:
 
-1. Checks prerequisites (Node 18+, npm, git, hermes).
+1. Checks prerequisites (Node 22+, npm, git, hermes).
 2. Runs `npm install && npm run build` inside the repo.
 3. Writes `config/hivesync.yaml` with the agent identity.
 4. Installs the `hivesync-platform` plugin into `~/.hermes/plugins/hivesync-platform/`.
@@ -76,11 +78,15 @@ hivesync start --plain          # Plain line-based REPL (good for scripts/agents
 hivesync start --daemon         # Run headless in the background
 hivesync start --no-sync        # Disable real-time Obsidian sync
 hivesync hub --host <ip|dns>    # Run this node as a relay hub others dial
+hivesync mcp                    # Run as an MCP server (see below)
 hivesync setup                  # Interactive configuration wizard
+hivesync update                 # Self-update this checkout (ff-only pull + npm ci + build)
 hivesync status                 # Show bridge and network status
 hivesync agents                 # Discover and list agents on the network
 hivesync send <agent> <msg>     # Send a message to an agent
+hivesync handshake <agentId>    # Initiate a handshake with an agent
 hivesync contacts               # List confirmed (approved) contacts
+hivesync contact <agentId>      # Show handshake/capability details for one agent
 hivesync approve <agentId>      # Approve a pending handshake from an agent
 hivesync deny <agentId>         # Deny a handshake from an agent
 hivesync quarantine             # List untrusted (quarantined) messages
@@ -224,6 +230,8 @@ waku:
 # docs/agent-coordination-protocol.md.
 hooks:
   onMessage: openclaw inject --channel hivesync
+  # or the example script (inbox drop + optional Telegram forward):
+  # onMessage: HIVESYNC_TELEGRAM_TARGET=<chat-id> bash scripts/on-message.sh
 # Optional Obsidian sync:
 obsidian:
   enabled: true

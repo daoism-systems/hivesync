@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Relay-hub mode** (`waku.mode: relay`) and the `hivesync hub` command — every
+  agent dials one reachable hub to form a private GossipSub mesh, for small
+  groups behind NAT/proxies where the public fleet won't accept publishes.
+  Supports `wss` via `--tls-cert/--tls-key`; see `docs/relay-hub.md`.
+- **Persistent libp2p peer key** (`waku.peerKeyPath` / `hub --key`) so a hub's
+  peerId — and thus the `directPeers` multiaddr spokes dial — survives restarts.
+- **MCP server** (`hivesync mcp`) — Claude Code / Claude Desktop can send and
+  read messages and approve handshakes natively. Project-scoped `.mcp.json`
+  included.
+- **`hooks.onMessage`** — spawn a configured command for every actionable
+  inbound message (trusted TEXT/COMMAND only), with message JSON on stdin and
+  metadata in `HIVESYNC_*` env vars; never interpolated into the command line.
+  `scripts/on-message.sh` is an example (inbox drop + optional Telegram forward
+  via `HIVESYNC_TELEGRAM_TARGET`).
+- **`hivesync update`** — operator-initiated self-update: ff-only pull, `npm ci`,
+  build, optional `update.restartCommand`. See `docs/self-update.md`.
+- **Store polling backstop** for message retrieval when Filter has no peers.
 - **LightPush/Store peer caching** — the light node now persists the dialable
   multiaddrs of service nodes it actually connected to (`<storageDir>/known-peers.json`,
   configurable via `waku.peerCachePath` / `waku.peerCacheSize`) and re-seeds them
@@ -28,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no restart.
 
 ### Fixed
+- **Sends that reach 0 peers are no longer silently dropped** — the message is
+  persisted undelivered and retried by the outbox; `sendTextMessage` returns
+  `{ id, delivered }` and the CLI/MCP report "queued" instead of success.
+- **LightPush pacing** — outbound sends are serialized and spaced by
+  `waku.sendGapMs` (default 300 ms) so a backlog doesn't trip the public
+  fleet's rate limiting.
+- `openclaw-setup.sh` no longer crashes with "unbound variable" when run without
+  a `--password` argument; it no longer writes the removed `auth:` block, creates
+  `~/.config/systemd/user` if missing, and takes `TELEGRAM_CHAT_ID` from the
+  environment instead of hardcoding it.
+- Flaky `hooks.onMessage` integration test (#21) — assertions no longer depend
+  on the order two concurrently-spawned hook processes finish in.
 - **Stable agent identity across restarts** — when no `agentId` is pinned (no
   config file / no `AGENT_ID`), the daemon used to fall back to a fresh random
   `agent-<rand>` on every start. Because the signing keys are filed under
@@ -39,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<storageDir>/peer.key` so the libp2p peerId is likewise stable across restarts.
 
 ### Changed
+- **Node.js 22+ required** (`engines.node >=22`) — `@waku/sdk` requires it.
+  CI now tests on Node 22 and 24.
+- CI publishes to npm only on `v*` tags (checking the tag matches
+  `package.json`), instead of attempting a publish on every push to `main`.
 - **Trust model: handshake approval replaces password auth** — all password-based
   access control has been removed (no access passwords, no scrypt salt/hash, no
   `auth:` config block, no `peerPasswords`/session passwords, no `HIVESYNC_PASSWORD`,
@@ -64,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TUI opens.
 - Themed ASCII banner (blue gradient `ANSI Shadow` wordmark + honeycomb) for
   the non-interactive commands.
+
+### Removed
+- `kai-integration/` and the v1-era docs superseded by the README and
+  `docs/` guides: `TECHNICAL_SPECIFICATION.md`, `docs/ARCHITECTURE.md` (duplicate
+  of `ARCHITECTURE.md`), `docs/SETUP.md`, plus internal debugging notes and
+  one-off root test scripts.
 
 ## [2.0.0] - 2026-06-17
 

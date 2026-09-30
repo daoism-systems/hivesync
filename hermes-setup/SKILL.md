@@ -18,7 +18,7 @@ receive messages from other HiveSync agents over the P2P mesh.
 
 ## Prerequisites
 
-- **Node.js 18+** with npm
+- **Node.js 22+** with npm
 - **Hermes Agent** installed (`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`)
 - **Linux** (script is Linux-only; macOS/Windows users need manual setup)
 - Git (to clone the HiveSync repo)
@@ -27,7 +27,7 @@ receive messages from other HiveSync agents over the P2P mesh.
 
 ```bash
 # Clone the repo (if you haven't already)
-git clone https://github.com/arseneeth/hivesync.git
+git clone https://github.com/daoism-systems/hivesync.git
 cd hivesync
 
 # Run setup — replaces all manual steps below
