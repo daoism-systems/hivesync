@@ -152,12 +152,13 @@ version: 1.0.0
 author: HiveSync
 license: MIT
 emoji: "🐝"
+kind: platform
 adapter_module: adapter
 register_function: register
-required_env:
+requires_env:
   - HIVESYNC_HOME
   - HIVESYNC_AGENT_ID
-install_hint: "Requires Node.js 22+ and a running HiveSync daemon (npm run build)"
+install_hint: "Requires Node.js 22+ and a running HiveSync daemon (hivesync.service)"
 YAML
 
 ok "Plugin installed at ${PLUGIN_DIR}/"
@@ -166,83 +167,113 @@ ok "Plugin installed at ${PLUGIN_DIR}/"
 header "Configuring Hermes gateway"
 
 if [[ ! -f "$CONFIG_YAML" ]]; then
-  cat > "$CONFIG_YAML" << YAML
-gateway:
-  platforms: {}
-YAML
+  mkdir -p "$HERMES_HOME"
+  printf 'gateway:\n  platforms: {}\n' > "$CONFIG_YAML"
   info "Created ${CONFIG_YAML}"
 fi
 
-if grep -q "^    hivesync:" "$CONFIG_YAML" 2>/dev/null || grep -q "^  hivesync:" "$CONFIG_YAML" 2>/dev/null; then
-  # Update existing block via Python
-  python3 - << PYEOF
-import re, sys
+BACKUP="${CONFIG_YAML}.bak-hivesync-$(date +%Y%m%d%H%M%S)"
+cp "$CONFIG_YAML" "$BACKUP"
 
-path = "${CONFIG_YAML}"
-home = "${REPO_DIR}"
-agent_id = "${AGENT_ID}"
-db_path = "${REPO_DIR}/data/hivesync.db"
+# Upsert the hivesync block under whichever platforms mapping the config
+# already uses (gateway.platforms, else top-level platforms), matching that
+# mapping's own indentation. The result is parsed back before it is written;
+# on any failure the config is left untouched.
+HS_CONFIG_YAML="$CONFIG_YAML" HS_HOME="$REPO_DIR" HS_AGENT_ID="$AGENT_ID" \
+HS_DB_PATH="${REPO_DIR}/data/hivesync.db" python3 - << 'PYEOF' || fail "Could not update ${CONFIG_YAML} (unchanged; backup at ${BACKUP})"
+import os, re, sys
 
-with open(path) as f:
-    text = f.read()
+path = os.environ["HS_CONFIG_YAML"]
+lines = open(path).read().splitlines()
 
-block = """\
-    hivesync:
-      enabled: true
-      extra:
-        home: {home}
-        agent_id: {agent_id}
-        db_path: {db_path}
-        poll_interval: 15
-        allow_all: true
-""".format(home=home, agent_id=agent_id, db_path=db_path)
+def indent(line):
+    return len(line) - len(line.lstrip(" "))
 
-# Replace existing hivesync block (everything from the hivesync: key until the
-# next same-level key or end of the platforms section)
-pattern = r'( {2,4})hivesync:.*?(?=\n\1\w|\n\ngateway|\Z)'
-if re.search(pattern, text, re.DOTALL):
-    text = re.sub(pattern, block.rstrip(), text, flags=re.DOTALL)
-    with open(path, 'w') as f:
-        f.write(text)
-    print("updated")
+def blank(line):
+    return not line.strip() or line.lstrip().startswith("#")
+
+def block_end(i):
+    """Index after the block whose key is on line i (next line at <= its indent)."""
+    j = i + 1
+    while j < len(lines) and (blank(lines[j]) or indent(lines[j]) > indent(lines[i])):
+        j += 1
+    return j
+
+def find_key(key, parent=None):
+    """Line index of `key:`; top-level if parent is None, else a direct child of line `parent`."""
+    if parent is None:
+        rng, want = range(len(lines)), 0
+    else:
+        rng = range(parent + 1, block_end(parent))
+        kids = [indent(lines[k]) for k in rng if not blank(lines[k])]
+        if not kids:
+            return None
+        want = min(kids)
+    for k in rng:
+        if indent(lines[k]) == want and re.match(r"\s*" + key + r":(\s|$)", lines[k]):
+            return k
+    return None
+
+gw = find_key("gateway")
+plat = find_key("platforms", gw) if gw is not None else None
+if plat is None:
+    plat = find_key("platforms")
+if plat is None:
+    if gw is None:
+        lines += ["gateway:", "  platforms:"]
+        plat = len(lines) - 1
+    else:
+        child = next((indent(l) for l in lines[gw + 1:block_end(gw)] if not blank(l)), 2)
+        lines.insert(gw + 1, " " * child + "platforms:")
+        plat = gw + 1
+
+value = lines[plat].split(":", 1)[1].split("#", 1)[0].strip()
+if value == "{}":
+    lines[plat] = lines[plat].split(":", 1)[0] + ":"
+elif value:
+    sys.exit(f"{path}: 'platforms' is an inline mapping ({value}); convert it to block style and re-run")
+
+# Drop an existing hivesync block, then insert a fresh one at the children's indent.
+hs = find_key("hivesync", plat)
+if hs is not None:
+    del lines[hs:block_end(hs)]
+kids = [indent(l) for l in lines[plat + 1:block_end(plat)] if not blank(l)]
+pad = " " * (min(kids) if kids else indent(lines[plat]) + 2)
+block = [
+    "hivesync:",
+    "  enabled: true",
+    "  extra:",
+    f"    home: {os.environ['HS_HOME']}",
+    f"    agent_id: {os.environ['HS_AGENT_ID']}",
+    f"    db_path: {os.environ['HS_DB_PATH']}",
+    "    poll_interval: 15",
+    "    allow_all: true",
+]
+lines[plat + 1:plat + 1] = [pad + b for b in block]
+text = "\n".join(lines) + "\n"
+
+try:
+    import yaml
+except ImportError:
+    print("  (PyYAML not available to python3 — skipped parse check)")
 else:
-    print("no-match")
+    data = yaml.safe_load(text)
+    platforms = ((data.get("gateway") or {}).get("platforms") or {}).get("hivesync") \
+        or (data.get("platforms") or {}).get("hivesync")
+    if not platforms:
+        sys.exit("generated config does not resolve to a hivesync platform block")
+
+open(path, "w").write(text)
 PYEOF
-  ok "Updated hivesync block in ${CONFIG_YAML}"
+ok "hivesync platform configured in ${CONFIG_YAML} (backup: ${BACKUP})"
+
+# User plugins are opt-in (config schema v21+): enable it explicitly.
+if command -v hermes &>/dev/null; then
+  hermes plugins enable hivesync >/dev/null 2>&1 \
+    && ok "Enabled Hermes plugin 'hivesync'" \
+    || warn "Could not enable the plugin — run: hermes plugins enable hivesync"
 else
-  # Append new block under gateway.platforms
-  python3 - << PYEOF
-path = "${CONFIG_YAML}"
-home = "${REPO_DIR}"
-agent_id = "${AGENT_ID}"
-db_path = "${REPO_DIR}/data/hivesync.db"
-
-with open(path) as f:
-    text = f.read()
-
-block = """\
-    hivesync:
-      enabled: true
-      extra:
-        home: {home}
-        agent_id: {agent_id}
-        db_path: {db_path}
-        poll_interval: 15
-        allow_all: true
-""".format(home=home, agent_id=agent_id, db_path=db_path)
-
-if "platforms:" in text:
-    # Insert after 'platforms:' line
-    text = text.replace("platforms:", "platforms:\n" + block, 1)
-elif "gateway:" in text:
-    text = text.replace("gateway:", "gateway:\n  platforms:\n" + block, 1)
-else:
-    text += "\ngateway:\n  platforms:\n" + block
-
-with open(path, 'w') as f:
-    f.write(text)
-PYEOF
-  ok "Added hivesync platform to ${CONFIG_YAML}"
+  warn "hermes not on PATH — enable the plugin later: hermes plugins enable hivesync"
 fi
 
 # ── 8. Set env vars in ~/.hermes/.env ────────────────────────────────────────
@@ -262,7 +293,46 @@ set_env_var "HIVESYNC_POLL_INTERVAL" "15"
 
 ok "Environment variables written to ~/.hermes/.env"
 
-# ── 9. Done ───────────────────────────────────────────────────────────────────
+# ── 9. HiveSync daemon (systemd user service) ────────────────────────────────
+# The adapter only queues outgoing messages in the DB; this long-lived daemon
+# holds the Waku connection, drains that outbox and retries until delivery.
+header "Setting up the HiveSync daemon"
+
+SERVICE_FILE="${HOME}/.config/systemd/user/hivesync.service"
+mkdir -p "$(dirname "$SERVICE_FILE")"
+cat > "$SERVICE_FILE" << SERVICEEOF
+[Unit]
+Description=HiveSync daemon (${AGENT_ID})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$(command -v node) ${REPO_DIR}/dist/cli.js start --daemon
+WorkingDirectory=${REPO_DIR}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+SERVICEEOF
+
+if systemctl --user daemon-reload 2>/dev/null; then
+  systemctl --user enable hivesync.service >/dev/null 2>&1 || true
+  systemctl --user restart hivesync.service 2>/dev/null || true
+  sleep 2
+  if systemctl --user is-active hivesync.service &>/dev/null; then
+    ok "hivesync.service running"
+  else
+    warn "hivesync.service did not start — check: journalctl --user -u hivesync -n 50"
+  fi
+  command -v loginctl &>/dev/null && ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes" \
+    && warn "To keep the daemon running after logout/at boot: loginctl enable-linger $USER"
+else
+  warn "systemd user session not available — run the daemon yourself:"
+  warn "  cd ${REPO_DIR} && node dist/cli.js start --daemon"
+fi
+
+# ── 10. Done ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BOLD}${GREEN}  HiveSync + Hermes setup complete!${NC}"

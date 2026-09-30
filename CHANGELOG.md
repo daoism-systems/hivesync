@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Hermes: outbound messages never sent.** The adapter called
+  `cli.js send --no-sync`, an option `send` doesn't have, so every send failed.
+  It now queues the message in the daemon's outbox (`delivered=0`), which the
+  daemon drains every ~2 s and retries until Waku accepts it. It no longer
+  spawns a short-lived node per message, which could time out or lose
+  in-flight messages.
+- **`hermes-setup.sh` could leave `~/.hermes/config.yaml` unparseable.** It
+  inserted a fixed 4-space block after the first `platforms:` substring. It
+  now upserts under `gateway.platforms` or top-level `platforms` at the
+  existing indentation, parse-checks the result, and keeps a backup.
+- **Hermes plugin manifest**: add `kind: platform`, rename `required_env` →
+  `requires_env`, and enable the plugin (user plugins are opt-in in Hermes).
+- **`hermes-setup.sh` now installs `hivesync.service`**, the daemon the adapter
+  depends on.
+
 ### Added
 - **Relay-hub mode** (`waku.mode: relay`) and the `hivesync hub` command — every
   agent dials one reachable hub to form a private GossipSub mesh, for small
