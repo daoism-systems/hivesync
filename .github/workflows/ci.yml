@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
@@ -21,7 +22,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: [22.x, 24.x]
 
     steps:
     - uses: actions/checkout@v4
@@ -41,22 +42,16 @@ jobs:
     - name: Lint
       run: npm run lint
     
-    - name: Run tests
-      run: npm test
-    
-    - name: Run integration tests
-      run: npm run test:integration
-    
-    - name: Run e2e tests
-      run: npm run test:e2e
-    
-    - name: Generate coverage report
+    # One pass over unit + integration (e2e self-skips, see above), with
+    # coverage — `npm test` / `test:integration` would just re-run the same suites.
+    - name: Run tests with coverage
       run: npm run coverage
     
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      if: matrix.node-version == '22.x'
+      uses: codecov/codecov-action@v5
       with:
-        file: ./coverage/lcov.info
+        files: ./coverage/lcov.info
         # Coverage upload is informational; don't fail the build on a Codecov
         # outage or tokenless-upload rate limit (429). Add a CODECOV_TOKEN repo
         # secret to make uploads reliable if gating on coverage is ever wanted.
@@ -65,15 +60,19 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Publish only on version tags (`git tag v2.1.0 && git push origin v2.1.0`);
+    # every push to main would otherwise re-publish the same version and fail.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Use Node.js 20.x
+    - name: Use Node.js 22.x
       uses: actions/setup-node@v4
       with:
-        node-version: '20.x'
+        node-version: '22.x'
         registry-url: 'https://registry.npmjs.org'
     
     - name: Install dependencies
@@ -82,13 +81,15 @@ jobs:
     - name: Build
       run: npm run build
     
+    - name: Check tag matches package.json version
+      run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+    
     - name: Publish to npm
       run: npm publish
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
       with:
         generate_release_notes: true

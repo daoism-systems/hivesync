@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "hivesync": "./dist/cli.js"
+    "hivesync": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
@@ -34,12 +34,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/clawbotl37/hivesync.git"
+    "url": "git+https://github.com/daoism-systems/hivesync.git"
   },
   "bugs": {
-    "url": "https://github.com/clawbotl37/hivesync/issues"
+    "url": "https://github.com/daoism-systems/hivesync/issues"
   },
-  "homepage": "https://github.com/clawbotl37/hivesync#readme",
+  "homepage": "https://github.com/daoism-systems/hivesync#readme",
   "dependencies": {
     "@chainsafe/libp2p-gossipsub": "^14.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -78,14 +78,13 @@
     "typescript": "^5.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "dist",
     "src",
     "docs",
     "openclaw-skill",
-    "kai-integration",
     "README.md",
     "LICENSE"
   ]
