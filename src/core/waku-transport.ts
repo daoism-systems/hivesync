@@ -764,11 +764,12 @@ export class WakuTransport implements Transport {
       return;
     }
 
+    if (!this.started) throw new Error('Waku transport not started');
     if (!this.node?.lightPush || !this.encoder) {
       // Fresh connections sometimes take a moment to discover LightPush peers.
       // Wait with backoff instead of immediately failing.
       let waited = 0;
-      while (!this.node?.lightPush && waited < 15000) {
+      while (this.started && !this.node?.lightPush && waited < 15000) {
         await delay(1000);
         waited += 1000;
       }
@@ -820,6 +821,12 @@ export class WakuTransport implements Transport {
 
     let lastFailures = 'unknown error';
     for (let attempt = 1; attempt <= retries; attempt++) {
+      // stop() nulls the node; retrying against it only keeps the process
+      // alive (CLI one-shots never exited) and spams warnings.
+      if (!this.started || !this.node?.lightPush) {
+        logger.debug('LightPush aborted: transport stopped');
+        return false;
+      }
       let result: any;
       try {
         result = await this.node.lightPush.send(this.encoder, { payload });
@@ -865,6 +872,9 @@ export class WakuTransport implements Transport {
   }
 
   async stop(): Promise<void> {
+    // Flip first so queued/retrying publishes bail out instead of waiting on a
+    // node that is going away.
+    this.started = false;
     if (this.peerCacheTimer) {
       clearInterval(this.peerCacheTimer);
       this.peerCacheTimer = null;

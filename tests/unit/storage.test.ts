@@ -242,6 +242,43 @@ describe('StorageManager', () => {
       expect(a!.encPublicKey).toBe('enc-pub');
       expect(a!.keyId).toBe('fp-123');
     });
+
+    test('should return the NEWEST conversation messages, oldest first', async () => {
+      for (let i = 0; i < 5; i++) {
+        await storage.saveMessage({
+          id: `c-${i}`,
+          sender: i % 2 ? 'me' : 'peer',
+          recipient: i % 2 ? 'peer' : 'me',
+          type: MessageType.TEXT,
+          content: { text: `m${i}` },
+          timestamp: new Date(Date.UTC(2026, 0, 1, 0, i)),
+          encrypted: false,
+        });
+      }
+      const convo = await storage.getConversation('peer', 'me', 3);
+      expect(convo.map((m) => m.id)).toEqual(['c-2', 'c-3', 'c-4']);
+    });
+
+    test('should read a plain-text outbox row as a text payload instead of throwing', async () => {
+      // External adapters write outbox rows directly; one that skipped
+      // JSON-encoding used to make every outbox read throw and stall the queue.
+      await (storage as any).db.run(
+        `INSERT INTO messages (id, sender, recipient, type, content, timestamp, encrypted, delivered, auto)
+         VALUES ('plain-1', 'me', 'peer', 'text', 'not json', ?, 1, 0, 0)`,
+        [new Date().toISOString()]
+      );
+      await storage.saveMessage({
+        id: 'json-1',
+        sender: 'me',
+        recipient: 'peer',
+        type: MessageType.TEXT,
+        content: { text: 'queued behind it' },
+        timestamp: new Date(Date.now() + 1000),
+        encrypted: false,
+      });
+      const pending = await storage.getPendingOutgoing('me');
+      expect(pending.map((m) => m.content.text)).toEqual(['not json', 'queued behind it']);
+    });
   });
 
   describe('Sync State', () => {

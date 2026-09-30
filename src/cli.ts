@@ -18,6 +18,16 @@ import { runConnectSequence } from './utils/splash';
 
 const program = new Command();
 
+/**
+ * Finish a one-shot command. js-waku/libp2p leave internal timers pending after
+ * node.stop(), so without an explicit exit a one-shot (`approve`, `send`, ...)
+ * never returns — fatal for adapters and scripts that shell out to the CLI.
+ */
+async function stopAndExit(bridge: BridgeManager, code = 0): Promise<never> {
+  await bridge.stop().catch(() => undefined);
+  process.exit(code);
+}
+
 /** Keep a daemon process alive and shut down cleanly on signals. */
 async function runHeadless(bridge: BridgeManager, label = 'daemon'): Promise<never> {
   logger.info(`Running headless (${label}). Stop with Ctrl-C or SIGTERM.`);
@@ -312,9 +322,10 @@ program
         });
       }
       
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to get status:', error);
+      process.exit(1);
     }
   });
 
@@ -334,9 +345,10 @@ program
         logger.warn(`Message queued (push reached 0 peers) — a running daemon will retry. ID: ${msgId}`);
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to send message:', error);
+      process.exit(1);
     }
   });
 
@@ -352,9 +364,10 @@ program
       await bridge.triggerSync();
       logger.success('Manual sync triggered with all agents');
       
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to sync:', error);
+      process.exit(1);
     }
   });
 
@@ -391,9 +404,10 @@ program
         });
       }
       
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to get sync status:', error);
+      process.exit(1);
     }
   });
 
@@ -420,9 +434,10 @@ program
         });
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to list agents:', error);
+      process.exit(1);
     }
   });
 
@@ -440,7 +455,7 @@ program
       const found = await bridge.waitForAgent(agentId, 15000);
       if (!found) {
         console.log(chalk.red('Agent not discovered on the network.'));
-        await bridge.stop();
+        await stopAndExit(bridge, 1);
         return;
       }
 
@@ -456,9 +471,10 @@ program
         console.log(chalk.yellow(`⏳ Handshake not confirmed (status: ${info?.status ?? 'unknown'})`));
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to handshake:', error);
+      process.exit(1);
     }
   });
 
@@ -483,9 +499,10 @@ program
         });
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to list contacts:', error);
+      process.exit(1);
     }
   });
 
@@ -510,9 +527,10 @@ program
         console.log(chalk.gray(`Last seen: ${contact.lastSeen?.toLocaleString() ?? 'n/a'}`));
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to read contact:', error);
+      process.exit(1);
     }
   });
 
@@ -555,6 +573,7 @@ program
   .description('Run connectivity and sync test')
   .action(async () => {
     console.log(chalk.cyan('\n=== Connectivity & Sync Test ===\n'));
+    let failed = false;
     
     // Test HiveSync connectivity
     console.log(chalk.white('1. Testing HiveSync network...'));
@@ -571,11 +590,13 @@ program
         console.log(chalk.white(`   Real-time sync: ${status.realTimeSync ? 'Enabled' : 'Disabled'}`));
       } else {
         console.log(chalk.red('   ❌ Failed to connect to HiveSync network'));
+        failed = true;
       }
       
       await bridge.stop();
     } catch (error) {
       console.log(chalk.red(`   Error: ${(error as Error).message}`));
+      failed = true;
     }
     
     console.log(chalk.white('\n2. Testing local storage...'));
@@ -587,6 +608,7 @@ program
       console.log(chalk.green('   ✅ Local storage working'));
     } catch (error) {
       console.log(chalk.red(`   Error: ${(error as Error).message}`));
+      failed = true;
     }
 
     console.log(chalk.white('\n3. Testing file system monitoring...'));
@@ -598,6 +620,7 @@ program
       console.log(chalk.green('   ✅ File system access working'));
     } catch (error) {
       console.log(chalk.red(`   Error: ${(error as Error).message}`));
+      failed = true;
     }
 
     console.log(chalk.white('\n4. Testing encryption...'));
@@ -606,9 +629,12 @@ program
       console.log(chalk.green('   ✅ Encryption working'));
     } catch (error) {
       console.log(chalk.red(`   Error: ${(error as Error).message}`));
+      failed = true;
     }
     
     console.log(chalk.cyan('\n=== Test Complete ===\n'));
+    // Waku leaves timers pending after stop(); exit explicitly (see stopAndExit).
+    process.exit(failed ? 1 : 0);
   });
 
 program
@@ -627,9 +653,10 @@ program
         console.log(chalk.yellow(`No pending handshake request found for ${agentId}`));
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to approve handshake:', error);
+      process.exit(1);
     }
   });
 
@@ -649,9 +676,10 @@ program
         console.log(chalk.yellow(`No pending handshake request found for ${agentId}`));
       }
 
-      await bridge.stop();
+      await stopAndExit(bridge);
     } catch (error) {
       logger.error('Failed to deny handshake:', error);
+      process.exit(1);
     }
   });
 

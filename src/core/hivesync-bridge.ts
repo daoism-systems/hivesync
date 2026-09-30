@@ -206,12 +206,17 @@ export class HiveSync {
     }
   }
 
-  async sendMessage(message: Omit<Message, 'id' | 'timestamp'>): Promise<string> {
+  /**
+   * Sign, optionally encrypt, and publish a message. `id` may be supplied so a
+   * message queued elsewhere (an outbox row) travels under the same id the
+   * sender's DB knows it by — otherwise the two sides can't correlate it.
+   */
+  async sendMessage(message: Omit<Message, 'id' | 'timestamp'> & { id?: string }): Promise<string> {
     if (!this.isConnected) {
       throw new Error('HiveSync bridge not initialized or connected');
     }
 
-    const id = uuidv4();
+    const id = message.id ?? uuidv4();
     const ts = Date.now();
     const recipient = message.recipient;
     const plaintext = Buffer.from(JSON.stringify(message.content ?? {}), 'utf-8');
@@ -256,6 +261,8 @@ export class HiveSync {
   }
 
   private async handleIncoming(payload: Uint8Array): Promise<void> {
+    // Late frames after disconnect(): dropping them avoids writes to a closed DB.
+    if (!this.isConnected) return;
     let envelope: Envelope;
     try {
       envelope = JSON.parse(Buffer.from(payload).toString('utf-8')) as Envelope;
@@ -338,7 +345,20 @@ export class HiveSync {
     try {
       content = this.decodeContent(envelope);
     } catch (error) {
-      logger.warn(`Failed to decode message ${envelope.id} from ${envelope.from}:`, error);
+      logger.warn(
+        `Failed to decode message ${envelope.id} from ${envelope.from}` +
+          (envelope.enc ? ' (encrypted to a key we do not hold — stale key pin on the sender?)' : '') +
+          ':',
+        error
+      );
+      // Tell the sender, or the failure is invisible on their side: the
+      // publish succeeded, so they believe it was delivered. Never for ACKs
+      // (no receipt storms) and only for frames addressed to us.
+      if (envelope.to === this.identity.agentId && envelope.type !== MessageType.ACK) {
+        await this.sendAck(envelope.id, envelope.from, 'undecryptable').catch((e) =>
+          logger.debug('Failed to send undecryptable ACK:', e)
+        );
+      }
       return;
     }
 
@@ -654,6 +674,9 @@ export class HiveSync {
   }
 
   async disconnect(): Promise<void> {
+    // Flip first so frames still in flight are ignored instead of reaching
+    // handlers whose storage is about to close.
+    this.isConnected = false;
     if (this.announceTimer) {
       clearInterval(this.announceTimer);
       this.announceTimer = null;
@@ -663,7 +686,6 @@ export class HiveSync {
       this.earlyAnnounceTimer = null;
     }
     await this.transport.stop();
-    this.isConnected = false;
     logger.info('HiveSync bridge disconnected');
   }
 

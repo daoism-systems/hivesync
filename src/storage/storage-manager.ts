@@ -180,7 +180,7 @@ export class StorageManager {
       sender: row.sender,
       recipient: row.recipient,
       type: row.type as any,
-      content: JSON.parse(row.content),
+      content: parseContent(row.content),
       timestamp: new Date(row.timestamp),
       encrypted: row.encrypted === 1,
       signature: row.signature || undefined,
@@ -196,27 +196,32 @@ export class StorageManager {
     return rows.map((row: any) => this.rowToMessage(row));
   }
 
-  /** Text conversation (both directions) between self and a peer, oldest first. */
+  /**
+   * The most recent `limit` text messages (both directions) between self and a
+   * peer, returned oldest first. Selecting newest-first then reversing matters:
+   * `ORDER BY ASC LIMIT` would return the OLDEST `limit` messages and hide
+   * everything recent once a conversation outgrows the limit.
+   */
   async getConversation(peerId: string, selfId: string, limit: number = 500): Promise<Message[]> {
     const rows = await this.db.all(
       `SELECT * FROM messages
        WHERE type = 'text'
          AND ((sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?))
-       ORDER BY timestamp ASC LIMIT ?`,
+       ORDER BY timestamp DESC LIMIT ?`,
       [peerId, selfId, selfId, peerId, limit]
     );
-    return rows.map((row: any) => this.rowToMessage(row));
+    return rows.reverse().map((row: any) => this.rowToMessage(row));
   }
 
-  /** All broadcast text messages, oldest first. */
+  /** The most recent `limit` broadcast text messages, oldest first. */
   async getBroadcasts(limit: number = 500): Promise<Message[]> {
     const rows = await this.db.all(
       `SELECT * FROM messages
        WHERE type = 'text' AND recipient = 'broadcast'
-       ORDER BY timestamp ASC LIMIT ?`,
+       ORDER BY timestamp DESC LIMIT ?`,
       [limit]
     );
-    return rows.map((row: any) => this.rowToMessage(row));
+    return rows.reverse().map((row: any) => this.rowToMessage(row));
   }
 
   async getUnreadMessages(): Promise<Message[]> {
@@ -566,5 +571,21 @@ function parseCapabilities(raw: any): string[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Tolerantly decode the JSON-encoded message content column. External adapters
+ * write outbox rows straight into the DB, and one that writes plain text
+ * instead of `{"text": ...}` must not make every read throw — that used to
+ * stall the whole outbox behind the bad row. Plain text is treated as a text
+ * payload, which is what the writer meant.
+ */
+function parseContent(raw: any): any {
+  if (raw === null || raw === undefined) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { text: String(raw) };
   }
 }

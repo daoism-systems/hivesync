@@ -37,7 +37,8 @@ export type AckStatus =
   | 'processed' // agent acted on it
   | 'deferred' // agent saw it but is busy; sender may retry with backoff
   | 'rejected' // agent refused it
-  | 'rate_limited'; // receiver dropped it to shed load
+  | 'rate_limited' // receiver dropped it to shed load
+  | 'undecryptable'; // receiver couldn't decrypt/decode it (key mismatch) and dropped it
 
 /** Liveness hint a peer can piggy-back on an ACK (lightweight heartbeat). */
 export type SenderStatus = 'online' | 'busy' | 'offline';
