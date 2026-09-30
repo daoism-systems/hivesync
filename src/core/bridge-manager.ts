@@ -19,7 +19,7 @@ const OUTBOX_POLL_INTERVAL_MS = 2000;
 
 /** Receipt statuses we persist; anything else a peer sends is ignored. */
 const ACK_STATUSES = new Set<string>([
-  'queued', 'deferred', 'processed', 'rejected', 'rate_limited', 'undecryptable',
+  'queued', 'deferred', 'processed', 'rejected', 'rate_limited', 'undecryptable', 'quarantined',
 ]);
 
 // How often we poll the DB for handshake approvals recorded by the CLI/UI.
@@ -242,6 +242,10 @@ export class BridgeManager extends EventEmitter {
         }
 
         try {
+          // A re-publish is a new attempt: clear the previous receipt first
+          // (before sending, so the new ACK can't race the reset). Otherwise
+          // a 'rejected' from the first try would stick forever.
+          await this.storage.resetAck(message.id);
           await this.hivesync.sendMessage({
             // Reuse the outbox row id on the wire so the recipient stores it
             // under the same id the adapter logged.
@@ -285,7 +289,7 @@ export class BridgeManager extends EventEmitter {
       const trusted = this.isTrusted(message);
       if (!trusted) {
         await this.quarantineMessage(message);
-        return;
+        return 'quarantined';
       }
       await this.storage.saveMessage(message);
       this.emit('text', message);
@@ -298,7 +302,7 @@ export class BridgeManager extends EventEmitter {
       const msg: Message = message;
       if (!trusted) {
         await this.quarantineMessage(msg);
-        return;
+        return 'quarantined';
       }
       await this.storage.saveMessage(msg);
       this.emit('message', msg);
@@ -320,6 +324,11 @@ export class BridgeManager extends EventEmitter {
       // Persist the receipt on our outbound row so agents and adapters can see
       // it (read_conversation / message_status / the ack_status column) —
       // "published" alone says nothing about whether the peer ingested it.
+      // Authenticity comes from recordAck: it only accepts receipts for
+      // messages we ENCRYPTED to the sender, i.e. to a key we had pinned — and
+      // the TOFU check upstream guarantees this ACK is signed by that same key.
+      // (Gating on handshake trust instead would drop every 'quarantined'
+      // receipt, since those come from peers that don't trust us yet.)
       if (originalMessageId && ACK_STATUSES.has(status)) {
         await this.storage
           .recordAck(originalMessageId, message.sender, status as AckStatus)

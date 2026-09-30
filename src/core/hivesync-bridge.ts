@@ -58,7 +58,12 @@ export interface HandshakeInfo {
   handshakeConfirmedAt?: Date;
 }
 
-export type MessageHandler = (message: Message) => void | Promise<void>;
+/**
+ * Handles one inbound message. May return the receipt status to send back —
+ * what actually happened to the message (stored → 'queued', held →
+ * 'quarantined'). Returning nothing means 'queued'.
+ */
+export type MessageHandler = (message: Message) => void | AckStatus | Promise<void | AckStatus>;
 export type AgentDiscoveredHandler = (agent: AgentIdentity) => void | Promise<void>;
 export type HandshakeConfirmedHandler = (info: HandshakeInfo) => void | Promise<void>;
 export type HandshakeApprovalNeededHandler = (info: { agentId: string; agentName: string; capabilities: string[] }) => void | Promise<void>;
@@ -394,15 +399,19 @@ export class HiveSync {
 
     // A handler failure must not escape: this runs inside transport
     // callbacks (filter/store), where an uncaught error kills the process.
+    // The receipt reports what the handler actually did with the message, so a
+    // quarantined or failed message never reads as ingested.
+    let disposition: AckStatus = 'queued';
     try {
-      await handler(message);
+      disposition = (await handler(message)) || 'queued';
     } catch (error) {
       logger.error(`Handler for ${message.type} ${message.id} from ${message.sender} failed:`, error);
+      disposition = 'rejected';
     }
 
     // ACK directed messages only (avoids broadcast ACK storms).
     if (message.type !== MessageType.ACK && envelope.to === this.identity.agentId) {
-      await this.sendAck(message.id, message.sender).catch((e) =>
+      await this.sendAck(message.id, message.sender, disposition).catch((e) =>
         logger.debug('Failed to send ACK:', e)
       );
     }

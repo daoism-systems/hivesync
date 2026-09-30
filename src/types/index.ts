@@ -35,6 +35,8 @@ export interface Message {
    */
   ackStatus?: AckStatus;
   ackedAt?: Date;
+  /** When this outbound message last went onto the wire (receipt clocks start here). */
+  publishedAt?: Date;
 }
 
 /** Delivery-receipt status carried in a MessageType.ACK payload. */
@@ -44,7 +46,8 @@ export type AckStatus =
   | 'deferred' // agent saw it but is busy; sender may retry with backoff
   | 'rejected' // agent refused it
   | 'rate_limited' // receiver dropped it to shed load
-  | 'undecryptable'; // receiver couldn't decrypt/decode it (key mismatch) and dropped it
+  | 'undecryptable' // receiver couldn't decrypt/decode it (key mismatch) and dropped it
+  | 'quarantined'; // receiver holds it unread: we're not a confirmed contact on its side
 
 /** Liveness hint a peer can piggy-back on an ACK (lightweight heartbeat). */
 export type SenderStatus = 'online' | 'busy' | 'offline';

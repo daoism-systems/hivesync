@@ -38,7 +38,11 @@ function slim(m: Message, self?: string): Record<string, unknown> {
     // Only present when true, to keep the common case uncluttered.
     ...(m.auto ? { auto: true } : {}),
     ...(outbound
-      ? { receipt: m.ackStatus ?? 'none', ...(m.ackedAt ? { receipt_at: m.ackedAt.toISOString() } : {}) }
+      ? {
+          receipt: m.ackStatus ?? 'none',
+          ...(m.ackedAt ? { receipt_at: m.ackedAt.toISOString() } : {}),
+          ...(m.publishedAt ? { published_at: m.publishedAt.toISOString() } : {}),
+        }
       : {}),
   };
 }
@@ -172,7 +176,8 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       title: 'Delivery status of a message',
       description:
         'Delivery receipt for a message you sent, by id (as returned by send_message). receipt is the ' +
-        "peer's last ACK: queued (received), processed, deferred (busy, retry later), rejected (unknown " +
+        "peer's last ACK: queued (stored in their inbox), quarantined (held unread: you're not a confirmed " +
+        'contact on their side), processed, deferred (busy, retry later), rejected (unknown ' +
         'type / refused), undecryptable (key mismatch: re-handshake), rate_limited — or none (published, ' +
         'but no receipt yet: the peer may be offline or never got it).',
       inputSchema: { message_id: z.string().describe('message id') },
