@@ -538,6 +538,18 @@ export class HiveSync {
     if (known) {
       known.capabilities = capabilities;
     }
+    // Already trusted (and the TOFU check upstream guarantees the same signing
+    // key): the peer just lost our approval ack, or restarted. Re-send the
+    // acceptance instead of demoting. Answering 'pending_approval' here used to
+    // deadlock both sides: each re-init reset the other to pending, so messages
+    // were quarantined and neither side ever saw the other's approval.
+    if (known?.handshakeStatus === 'confirmed') {
+      await this.sendHandshakeAck(from, true).catch((e) =>
+        logger.debug('Failed to re-send handshake ack:', e)
+      );
+      logger.info(`Handshake re-init from confirmed contact ${from} — re-sent acceptance`);
+      return;
+    }
     // Require explicit user approval before confirming. Send a pending ack.
     await this.sendHandshakeAck(from, false, 'pending_approval').catch((e) =>
       logger.debug('Failed to send handshake ack:', e)
@@ -562,7 +574,9 @@ export class HiveSync {
         known.handshakeStatus = 'confirmed';
         known.handshakeConfirmedAt = new Date();
       } else if (payload.reason === 'pending_approval') {
-        known.handshakeStatus = 'pending';
+        // Their approval of us is pending; our trust in them is our own
+        // decision and must not be downgraded by it.
+        if (known.handshakeStatus !== 'confirmed') known.handshakeStatus = 'pending';
       } else {
         known.handshakeStatus = 'failed';
       }
