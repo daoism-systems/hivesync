@@ -56,6 +56,11 @@ async function main(): Promise<void> {
         byPair.set(key, (byPair.get(key) ?? 0) + 1);
         // Waku-level timestamp (ns Date) — envelope field names vary.
         const at = msg.timestamp ? new Date(msg.timestamp).toISOString() : '';
+        // CENSUS_MATCH=<substring>: print each matching envelope (id, time, route)
+        // to trace a single message end to end.
+        if (process.env.CENSUS_MATCH && key.includes(process.env.CENSUS_MATCH)) {
+          log(`  ${at}  ${env.id}  ${key}${env.enc ? '  (enc)' : ''}`);
+        }
         const fromKey = String(env.from);
         if (!latest.has(fromKey) || at > (latest.get(fromKey) ?? '')) {
           latest.set(fromKey, at);

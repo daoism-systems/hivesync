@@ -379,14 +379,25 @@ export class HiveSync {
     logger.debug(`Received ${message.type} from ${message.sender}`);
 
     const handler = this.messageHandlers.get(message.type);
-    if (handler) {
-      // A handler failure must not escape: this runs inside transport
-      // callbacks (filter/store), where an uncaught error kills the process.
-      try {
-        await handler(message);
-      } catch (error) {
-        logger.error(`Handler for ${message.type} ${message.id} from ${message.sender} failed:`, error);
+    if (!handler) {
+      // Nothing will ever read this message. ACKing it as 'queued' told the
+      // sender it was delivered while it vanished (seen live: a peer's outbox
+      // writer emitted type "1" and six messages disappeared). Reject instead.
+      logger.warn(`Dropping ${message.id} from ${message.sender}: unknown message type ${JSON.stringify(message.type)}`);
+      if (envelope.to === this.identity.agentId && message.type !== MessageType.ACK) {
+        await this.sendAck(message.id, message.sender, 'rejected').catch((e) =>
+          logger.debug('Failed to send rejected ACK:', e)
+        );
       }
+      return;
+    }
+
+    // A handler failure must not escape: this runs inside transport
+    // callbacks (filter/store), where an uncaught error kills the process.
+    try {
+      await handler(message);
+    } catch (error) {
+      logger.error(`Handler for ${message.type} ${message.id} from ${message.sender} failed:`, error);
     }
 
     // ACK directed messages only (avoids broadcast ACK storms).

@@ -328,6 +328,72 @@ describe('BridgeManager communication (in-memory transport)', () => {
     }
   }, 25000);
 
+  test('an outbox row with a bogus type still arrives as text', async () => {
+    const OB_TOPIC = '/hivesync-test/1/outbox-type/proto';
+    const aCfg = makeConfig('ob-alpha', 'OB Alpha');
+    aCfg.waku.contentTopic = OB_TOPIC;
+    const bCfg = makeConfig('ob-beta', 'OB Beta');
+    bCfg.waku.contentTopic = OB_TOPIC;
+    const a = new BridgeManager(aCfg, new InMemoryTransport(OB_TOPIC, 'ob-alpha'));
+    const b = new BridgeManager(bCfg, new InMemoryTransport(OB_TOPIC, 'ob-beta'));
+
+    try {
+      await a.start();
+      await b.start();
+      await establishTrust(a, b, 'ob-alpha', 'ob-beta');
+
+      // An external adapter hand-writes the row with type "1" (seen live).
+      await (a as any).storage.db.run(
+        `INSERT INTO messages (id, sender, recipient, type, content, timestamp, encrypted, delivered, auto)
+         VALUES ('ob-row-1', 'ob-alpha', 'ob-beta', '1', ?, ?, 1, 0, 0)`,
+        [JSON.stringify({ text: 'typed wrong in the outbox' }), new Date().toISOString()]
+      );
+
+      expect(
+        await waitFor(
+          async () => (await b.getConversation('ob-alpha')).some((m) => m.id === 'ob-row-1'),
+          8000
+        )
+      ).toBe(true);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  }, 25000);
+
+  test('a message of unknown type is rejected, not ACKed as delivered', async () => {
+    const UT_TOPIC = '/hivesync-test/1/unknown-type/proto';
+    const aCfg = makeConfig('ut-alpha', 'UT Alpha');
+    aCfg.waku.contentTopic = UT_TOPIC;
+    const bCfg = makeConfig('ut-beta', 'UT Beta');
+    bCfg.waku.contentTopic = UT_TOPIC;
+    const a = new BridgeManager(aCfg, new InMemoryTransport(UT_TOPIC, 'ut-alpha'));
+    const b = new BridgeManager(bCfg, new InMemoryTransport(UT_TOPIC, 'ut-beta'));
+
+    try {
+      await a.start();
+      await b.start();
+      await establishTrust(a, b, 'ut-alpha', 'ut-beta');
+
+      const acks: string[] = [];
+      a.on('ack', (r: { status?: string }) => acks.push(r.status ?? ''));
+
+      await (a as any).hivesync.sendMessage({
+        sender: 'ut-alpha',
+        recipient: 'ut-beta',
+        type: '1',
+        content: { text: 'nobody handles this' },
+        encrypted: true,
+      });
+
+      expect(await waitFor(() => acks.includes('rejected'), 3000)).toBe(true);
+      expect(acks).not.toContain('queued');
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  }, 25000);
+
   describe('lifecycle', () => {
     test('stop is safe before start and idempotent', async () => {
       await expect(alpha.stop()).resolves.not.toThrow();
