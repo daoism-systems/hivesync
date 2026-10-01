@@ -1,5 +1,5 @@
 /**
- * Proves the relay-hub topology with NO public Waku fleet: one hub transport
+ * Proves the relay-hub topology with NO public Logos Messaging fleet: one hub transport
  * that listens, two spokes that dial the hub. A payload published by spoke A
  * must reach spoke B (relayed by the hub), and vice-versa — i.e. real
  * bidirectional delivery through a single reachable node.

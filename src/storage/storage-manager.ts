@@ -1,7 +1,22 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import { v4 as uuidv4 } from 'uuid';
-import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus, HandshakeApproval } from '../types';
+import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus, HandshakeApproval, AckStatus } from '../types';
+
+/**
+ * Receipt strength. `queued` < `deferred` < a final outcome. Terminal failures
+ * outrank `processed` so a problem is never hidden behind an earlier success
+ * receipt for the same id.
+ */
+const ACK_RANK: Record<AckStatus, number> = {
+  queued: 1,
+  deferred: 2,
+  processed: 3,
+  rate_limited: 4,
+  rejected: 4,
+  undecryptable: 4,
+  quarantined: 4,
+};
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -131,6 +146,16 @@ export class StorageManager {
     if (!names.has('auto')) {
       await this.db.exec(`ALTER TABLE messages ADD COLUMN auto INTEGER DEFAULT 0`);
     }
+    // Delivery receipts written back onto the outbound row (see recordAck).
+    if (!names.has('ack_status')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN ack_status TEXT`);
+    }
+    if (!names.has('acked_at')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN acked_at TEXT`);
+    }
+    if (!names.has('published_at')) {
+      await this.db.exec(`ALTER TABLE messages ADD COLUMN published_at TEXT`);
+    }
   }
 
   /** Add handshake columns to a pre-existing agents table (idempotent). */
@@ -185,7 +210,39 @@ export class StorageManager {
       encrypted: row.encrypted === 1,
       signature: row.signature || undefined,
       auto: row.auto === 1,
+      ...(row.ack_status ? { ackStatus: row.ack_status, ackedAt: new Date(row.acked_at) } : {}),
+      ...(row.published_at ? { publishedAt: new Date(row.published_at) } : {}),
     };
+  }
+
+  async getMessage(id: string): Promise<Message | null> {
+    const row = await this.db.get(`SELECT * FROM messages WHERE id = ?`, [id]);
+    return row ? this.rowToMessage(row) : null;
+  }
+
+  /**
+   * Record a delivery receipt on the outbound message it acknowledges. Only the
+   * message's own recipient can ACK it. Receipts can arrive out of order or be
+   * redelivered, so a weaker status never overwrites a stronger one (a late
+   * 'queued' must not mask 'processed' or 'rejected'). Only messages we sent
+   * encrypted can carry a receipt: encrypting needed the recipient's pinned
+   * key, so a receipt signed by that key is authentic — for a plaintext send
+   * to an unpinned id, anyone could announce that id and forge one.
+   * Returns true if stored.
+   */
+  async recordAck(messageId: string, from: string, status: AckStatus): Promise<boolean> {
+    if (!(status in ACK_RANK)) return false; // unknown status from the wire
+    const row = await this.db.get(
+      `SELECT ack_status FROM messages WHERE id = ? AND recipient = ? AND encrypted = 1`,
+      [messageId, from]
+    );
+    if (!row) return false;
+    if (row.ack_status && ACK_RANK[row.ack_status as AckStatus] > ACK_RANK[status]) return false;
+    await this.db.run(
+      `UPDATE messages SET ack_status = ?, acked_at = ? WHERE id = ?`,
+      [status, new Date().toISOString(), messageId]
+    );
+    return true;
   }
 
   async getMessages(limit: number = 100, offset: number = 0): Promise<Message[]> {
@@ -240,7 +297,7 @@ export class StorageManager {
   }
 
   /**
-   * Outgoing messages we authored that haven't been sent over Waku yet. These
+   * Outgoing messages we authored that haven't been sent over Logos Messaging yet. These
    * are typically written directly to the DB by external adapters (e.g. Hermes)
    * which never contact the daemon; the outbox poller picks them up and sends.
    */
@@ -252,12 +309,21 @@ export class StorageManager {
     return rows.map((row: any) => this.rowToMessage(row));
   }
 
-  /** Mark an outgoing message as delivered (successfully sent over Waku). */
+  /**
+   * Mark an outgoing message as published (accepted by >=1 Logos Messaging peer) and stamp
+   * published_at — the clock receipt timeouts start from. Published is NOT
+   * received: that is what ack_status is for.
+   */
   async markDelivered(messageId: string): Promise<void> {
     await this.db.run(
-      `UPDATE messages SET delivered = 1 WHERE id = ?`,
-      [messageId]
+      `UPDATE messages SET delivered = 1, published_at = ? WHERE id = ?`,
+      [new Date().toISOString(), messageId]
     );
+  }
+
+  /** Forget the receipt of a previous publish attempt before re-publishing. */
+  async resetAck(messageId: string): Promise<void> {
+    await this.db.run(`UPDATE messages SET ack_status = NULL, acked_at = NULL WHERE id = ?`, [messageId]);
   }
 
   // Agent operations

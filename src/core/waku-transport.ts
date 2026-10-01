@@ -116,7 +116,7 @@ function dropForeignFleet(addrs: string[]): string[] {
 }
 
 /**
- * Resolve the public Waku fleet's enrTree to dialable WSS multiaddrs using the
+ * Resolve the public Logos Messaging fleet's enrTree to dialable WSS multiaddrs using the
  * *system* DNS resolver (node:dns), bypassing the SDK's default DNS-over-HTTPS
  * discovery path.
  *
@@ -240,7 +240,7 @@ export function mergeByPeerId(primary: string[], extra: string[]): string[] {
 export type RawMessageHandler = (payload: Uint8Array) => void;
 
 /**
- * Thin wrapper over a Waku **light node**: connect, publish bytes to the
+ * Thin wrapper over a Logos Messaging **light node**: connect, publish bytes to the
  * configured content topic, and subscribe to receive bytes.
  *
  * WHY A LIGHT NODE (and not a Relay node):
@@ -250,13 +250,13 @@ export type RawMessageHandler = (payload: Uint8Array) => void;
  * disjoint meshes when only 2-3 of our own nodes are involved. That is the
  * "messages never arrive" failure we hit.
  *
- * A light node instead dials *out* to the public Waku Network's service nodes
+ * A light node instead dials *out* to the public Logos Messaging Network's service nodes
  * and uses request/response protocols over those outbound streams:
  *   - LightPush (send): a service node publishes our message into the mesh.
  *   - Filter   (recv): a service node pushes matching messages back to us.
  *   - Store    (recv): poll a service node for anything Filter missed.
  * All three work through outbound connections, so NAT is a non-issue and the
- * well-connected fleet provides the mesh backbone. This is the model Waku
+ * well-connected fleet provides the mesh backbone. This is the model Logos Messaging
  * designed for resource-restricted / non-reachable nodes, and the one the
  * original HiveSync prototype used successfully.
  *
@@ -390,7 +390,7 @@ export class WakuTransport implements Transport {
     }
 
     this.started = true;
-    logger.info(`Waku relay node started (peerId ${this.node.peerId.toString()})`);
+    logger.info(`Logos Messaging relay node started (peerId ${this.node.peerId.toString()})`);
     const addrs = this.getDialableMultiaddrs();
     if (addrs.length) {
       logger.info(`Relay listening — dialable as:\n  ${addrs.join('\n  ')}`);
@@ -466,7 +466,7 @@ export class WakuTransport implements Transport {
     }
 
     // A light node connects OUT to the public fleet; it does not need to listen
-    // for inbound dials. defaultBootstrap discovers The Waku Network service
+    // for inbound dials. defaultBootstrap discovers The Logos Messaging Network service
     // nodes via DNS discovery + the static bootstrap list.
     //
     // numPeersToUse: the SDK defaults to 1 — every LightPush goes to a SINGLE
@@ -514,7 +514,7 @@ export class WakuTransport implements Transport {
       [Protocols.LightPush, Protocols.Filter, Protocols.Store],
       peerWaitTimeoutMs
     ).catch(() => {
-      logger.warn('Timed out waiting for Waku peers — continuing, will retry on use');
+      logger.warn('Timed out waiting for Logos Messaging peers — continuing, will retry on use');
     });
 
     // Accumulate more peers before allowing sends to start.  The first peer
@@ -538,7 +538,7 @@ export class WakuTransport implements Transport {
     this.decoder = this.node.createDecoder({ contentTopic: this.config.contentTopic });
 
     this.started = true;
-    logger.info(`Waku light node connected (peerId ${this.node.peerId.toString()})`);
+    logger.info(`Logos Messaging light node connected (peerId ${this.node.peerId.toString()})`);
     logger.info(
       `Protocols — LightPush: ${!!this.node.lightPush}, Filter: ${!!this.node.filter}, Store: ${!!this.node.store}`
     );
@@ -628,7 +628,7 @@ export class WakuTransport implements Transport {
     this.handler = handler;
 
     if (this.isRelay) {
-      if (!this.node?.relay || !this.decoder) throw new Error('Waku transport not started');
+      if (!this.node?.relay || !this.decoder) throw new Error('Logos Messaging transport not started');
       // Receive straight off the GossipSub mesh — no Filter/Store needed.
       this.relayUnsub = this.node.relay.subscribeWithUnsubscribe([this.decoder], (msg: DecodedMessage) => {
         if (msg.payload && msg.payload.length > 0 && this.handler) this.handler(msg.payload);
@@ -638,7 +638,7 @@ export class WakuTransport implements Transport {
     }
 
     if (!this.node?.filter || !this.decoder) {
-      throw new Error('Waku transport not started');
+      throw new Error('Logos Messaging transport not started');
     }
 
     // Primary RECEIVE path: Filter. A service node subscribes to the mesh on
@@ -668,7 +668,7 @@ export class WakuTransport implements Transport {
       });
 
       if (result?.error) {
-        logger.warn(`Waku filter subscribe failed: ${result.error}`);
+        logger.warn(`Logos Messaging filter subscribe failed: ${result.error}`);
         return 0;
       }
       const successes = result?.results?.successes?.length ?? 0;
@@ -694,7 +694,7 @@ export class WakuTransport implements Transport {
   }
 
   /**
-   * Poll the Waku Store protocol every 5 seconds for messages on our content
+   * Poll the Logos Messaging Store protocol every 5 seconds for messages on our content
    * topic since the last query — a backstop for whatever Filter misses.
    */
   private startStorePolling(): void {
@@ -743,7 +743,7 @@ export class WakuTransport implements Transport {
    */
   async publish(payload: Uint8Array, retries = 5): Promise<void> {
     if (this.isRelay) {
-      if (!this.node?.relay || !this.encoder) throw new Error('Waku transport not started');
+      if (!this.node?.relay || !this.encoder) throw new Error('Logos Messaging transport not started');
       // Publish into the mesh; the hub forwards to the other spokes. We don't
       // hard-fail on a transient empty result — the bridge resends.
       try {
@@ -764,7 +764,7 @@ export class WakuTransport implements Transport {
       return;
     }
 
-    if (!this.started) throw new Error('Waku transport not started');
+    if (!this.started) throw new Error('Logos Messaging transport not started');
     if (!this.node?.lightPush || !this.encoder) {
       // Fresh connections sometimes take a moment to discover LightPush peers.
       // Wait with backoff instead of immediately failing.
@@ -774,7 +774,7 @@ export class WakuTransport implements Transport {
         waited += 1000;
       }
       if (!this.node?.lightPush || !this.encoder) {
-        throw new Error('Waku transport not started');
+        throw new Error('Logos Messaging transport not started');
       }
     }
 
@@ -909,7 +909,7 @@ export class WakuTransport implements Transport {
       try {
         await this.node.stop();
       } catch (error) {
-        logger.warn('Error stopping Waku node:', error);
+        logger.warn('Error stopping Logos Messaging node:', error);
       }
       this.node = null;
     }

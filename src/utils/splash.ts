@@ -76,7 +76,7 @@ export async function runConnectSequence(bridge: BridgeManager, config: any): Pr
   await step('Deriving X25519 encryption keys', async () => sleep(380));
 
   // The real connection. start() resolves once we're attached to the network.
-  const started = await step('Dialing Waku bootstrap nodes', () => bridge.start());
+  const started = await step('Dialing Logos Messaging bootstrap nodes', () => bridge.start());
   if (!started) {
     console.log();
     console.log('  ' + chalk.red('✗ could not reach the hivemind — is the network up?'));

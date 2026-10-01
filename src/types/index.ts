@@ -29,6 +29,14 @@ export interface Message {
    * docs/agent-coordination-protocol.md.
    */
   auto?: boolean;
+  /**
+   * Latest delivery receipt the recipient sent back for this (outbound)
+   * message, if any. Absent = no receipt yet: published is not delivered.
+   */
+  ackStatus?: AckStatus;
+  ackedAt?: Date;
+  /** When this outbound message last went onto the wire (receipt clocks start here). */
+  publishedAt?: Date;
 }
 
 /** Delivery-receipt status carried in a MessageType.ACK payload. */
@@ -38,7 +46,8 @@ export type AckStatus =
   | 'deferred' // agent saw it but is busy; sender may retry with backoff
   | 'rejected' // agent refused it
   | 'rate_limited' // receiver dropped it to shed load
-  | 'undecryptable'; // receiver couldn't decrypt/decode it (key mismatch) and dropped it
+  | 'undecryptable' // receiver couldn't decrypt/decode it (key mismatch) and dropped it
+  | 'quarantined'; // receiver holds it unread: we're not a confirmed contact on its side
 
 /** Liveness hint a peer can piggy-back on an ACK (lightweight heartbeat). */
 export type SenderStatus = 'online' | 'busy' | 'offline';
@@ -109,7 +118,7 @@ export interface Contact {
 }
 
 /**
- * The on-the-wire frame published to the Waku content topic. JSON-serializable
+ * The on-the-wire frame published to the Logos Messaging content topic. JSON-serializable
  * (no Date objects, no Buffers) so it round-trips losslessly.
  */
 export interface Envelope {
@@ -178,7 +187,7 @@ export interface SyncState {
 export interface WakuConfig {
   /**
    * Transport mode.
-   * - 'light' (default): connect out to the public Waku fleet (LightPush +
+   * - 'light' (default): connect out to the public Logos Messaging fleet (LightPush +
    *   Filter + Store). Zero infra, but publishing depends on a public service
    *   node accepting our push — unreliable on some hosts/networks over time.
    * - 'relay': run a GossipSub relay node and connect all agents to a common
@@ -193,7 +202,7 @@ export interface WakuConfig {
    * the hub, e.g. ['/ip4/1.2.3.4/tcp/443/ws/p2p/16Uiu2HA...'].
    */
   directPeers: string[];
-  /** Waku cluster id (The Waku Network is cluster 1). */
+  /** Logos Messaging cluster id (The Logos Messaging Network is cluster 1). */
   clusterId: number;
   /** Number of shards in the (auto-sharding) cluster. */
   numShardsInCluster: number;

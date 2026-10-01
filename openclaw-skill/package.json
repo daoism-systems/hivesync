@@ -1,7 +1,7 @@
 {
   "name": "openclaw-waku-bridge",
   "version": "1.0.0",
-  "description": "OpenClaw skill for Waku Bridge communication",
+  "description": "OpenClaw skill for Logos Messaging Bridge communication",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "ts-node src/index.ts",
     "test": "jest"
   },
-  "keywords": ["openclaw", "waku", "communication", "agent"],
+  "keywords": ["openclaw", "logos-messaging", "waku", "communication", "agent"],
   "author": "HiveSync Contributors",
   "license": "MIT",
   "dependencies": {

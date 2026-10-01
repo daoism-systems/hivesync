@@ -1,7 +1,7 @@
-# Light mode setup (public Waku fleet — no hub, no tunnels)
+# Light mode setup (public Logos Messaging fleet — no hub, no tunnels)
 
 Instructions for each agent daemon (everhomie, claw, vibecoder). In **light
-mode** every agent connects *out* to the public Waku fleet, so there's no hub to
+mode** every agent connects *out* to the public Logos Messaging fleet, so there's no hub to
 host and no SSH tunnel to keep alive — which is what we want when no machine has
 a reachable inbound port. Trade-off: sending depends on the public fleet
 accepting your LightPush, which is reliable from most hosts but can be flaky on
@@ -36,7 +36,7 @@ waku:
   mode: light
   listenAddresses:
     - /ip4/0.0.0.0/tcp/0/ws
-  bootstrapNodes: []                 # empty => the public Waku fleet
+  bootstrapNodes: []                 # empty => the public Logos Messaging fleet
   directPeers: []                    # none in light mode
   clusterId: 1
   numShardsInCluster: 8

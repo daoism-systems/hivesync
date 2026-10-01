@@ -328,6 +328,34 @@ describe('BridgeManager communication (in-memory transport)', () => {
     }
   }, 25000);
 
+  test("a message the peer quarantines comes back 'quarantined', not 'queued'", async () => {
+    const QT_TOPIC = '/hivesync-test/1/quarantine-receipt/proto';
+    const aCfg = makeConfig('qt-alpha', 'QT Alpha');
+    aCfg.waku.contentTopic = QT_TOPIC;
+    const bCfg = makeConfig('qt-beta', 'QT Beta');
+    bCfg.waku.contentTopic = QT_TOPIC;
+    const a = new BridgeManager(aCfg, new InMemoryTransport(QT_TOPIC, 'qt-alpha'));
+    const b = new BridgeManager(bCfg, new InMemoryTransport(QT_TOPIC, 'qt-beta'));
+
+    try {
+      await a.start();
+      await b.start();
+      await a.waitForAgent('qt-beta', 5000);
+      await b.waitForAgent('qt-alpha', 5000);
+      // No approvals: beta doesn't trust alpha, so it quarantines alpha's
+      // message. alpha knows beta's key, so the message is still encrypted.
+
+      const { id } = await a.sendTextMessage('qt-beta', 'will be held');
+      expect(
+        await waitFor(async () => (await a.getMessage(id))?.ackStatus === 'quarantined', 5000)
+      ).toBe(true);
+      expect(await b.getQuarantineCount()).toBeGreaterThan(0);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  }, 25000);
+
   test('an outbox row with a bogus type still arrives as text', async () => {
     const OB_TOPIC = '/hivesync-test/1/outbox-type/proto';
     const aCfg = makeConfig('ob-alpha', 'OB Alpha');
@@ -388,6 +416,12 @@ describe('BridgeManager communication (in-memory transport)', () => {
 
       expect(await waitFor(() => acks.includes('rejected'), 3000)).toBe(true);
       expect(acks).not.toContain('queued');
+
+      // A normal text gets a 'queued' receipt persisted on the sender's row.
+      const { id } = await a.sendTextMessage('ut-beta', 'this one is handled');
+      expect(
+        await waitFor(async () => (await a.getMessage(id))?.ackStatus === 'queued', 3000)
+      ).toBe(true);
     } finally {
       await a.stop();
       await b.stop();

@@ -29,7 +29,7 @@ const buses = new Map<string, Set<InMemoryTransport>>();
 
 /**
  * In-process pub/sub transport. All instances sharing a content topic see each
- * other's published frames (except their own), mirroring Waku's broadcast model
+ * other's published frames (except their own), mirroring Logos Messaging's broadcast model
  * without any network. Used for fast, deterministic tests.
  */
 export class InMemoryTransport implements Transport {

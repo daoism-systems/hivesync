@@ -10,7 +10,7 @@ export class WakuBridgeSkill extends Skill {
     super({
       name: 'waku-bridge',
       version: '1.0.0',
-      description: 'Secure Waku-based communication between agents',
+      description: 'Secure communication over Logos Messaging between agents',
       author: 'HiveSync Contributors',
       triggers: [
         'waku',
@@ -32,9 +32,9 @@ export class WakuBridgeSkill extends Skill {
       this.bridge = new BridgeManager(this.config);
       await this.bridge.start();
       
-      this.logger.info('Waku Bridge skill initialized');
+      this.logger.info('Logos Messaging Bridge skill initialized');
     } catch (error) {
-      this.logger.error('Failed to initialize Waku Bridge skill:', error);
+      this.logger.error('Failed to initialize Logos Messaging Bridge skill:', error);
       throw error;
     }
   }
@@ -44,7 +44,7 @@ export class WakuBridgeSkill extends Skill {
     
     try {
       if (!this.bridge) {
-        return this.createResponse('Waku Bridge is not initialized', false);
+        return this.createResponse('Logos Messaging Bridge is not initialized', false);
       }
 
       // Check for specific commands
@@ -114,7 +114,7 @@ export class WakuBridgeSkill extends Skill {
 
       // Default response
       return this.createResponse(
-        'I can help you with Waku Bridge communication. Try asking about status, sending messages, or syncing Obsidian.',
+        'I can help you with Logos Messaging Bridge communication. Try asking about status, sending messages, or syncing Obsidian.',
         false
       );
 
@@ -129,7 +129,7 @@ export class WakuBridgeSkill extends Skill {
       await this.bridge.stop();
       this.bridge = null;
     }
-    this.logger.info('Waku Bridge skill shutdown');
+    this.logger.info('Logos Messaging Bridge skill shutdown');
   }
 
   private createResponse(text: string, success: boolean): Response {

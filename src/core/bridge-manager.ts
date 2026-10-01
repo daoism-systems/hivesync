@@ -10,12 +10,17 @@ import { Transport } from './transport';
 import { StorageManager } from '../storage/storage-manager';
 import { QuarantineStore } from '../storage/quarantine-store';
 import { RealTimeSyncManager } from '../sync/real-time-sync';
-import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage, Contact, HandshakeApproval } from '../types';
+import { BridgeConfig, AgentIdentity, AckStatus, Message, MessageType, QuarantinedMessage, Contact, HandshakeApproval } from '../types';
 import { HandshakeInfo } from './hivesync-bridge';
 import { logger } from '../utils/logger';
 
-// How often the outbox poller checks the DB for messages to push over Waku.
+// How often the outbox poller checks the DB for messages to push over Logos Messaging.
 const OUTBOX_POLL_INTERVAL_MS = 2000;
+
+/** Receipt statuses we persist; anything else a peer sends is ignored. */
+const ACK_STATUSES = new Set<string>([
+  'queued', 'deferred', 'processed', 'rejected', 'rate_limited', 'undecryptable', 'quarantined',
+]);
 
 // How often we poll the DB for handshake approvals recorded by the CLI/UI.
 const APPROVAL_POLL_INTERVAL_MS = 3000;
@@ -45,7 +50,7 @@ export class BridgeManager extends EventEmitter {
   private processingOutbox = false;
   private isRunning = false;
   // True when a transport was injected (tests use InMemoryTransport). The
-  // Waku-fleet startup delay below is meaningless for an in-process transport
+  // public-fleet startup delay below is meaningless for an in-process transport
   // and would only slow tests, so we skip it in that case.
   private readonly hasInjectedTransport: boolean;
 
@@ -112,7 +117,7 @@ export class BridgeManager extends EventEmitter {
 
       // Brief pause so the first LightPush epoch can stabilise before the
       // initial announce/sync burst fires — prevents rate-limit rejection
-      // on the very first send. Only relevant for the real Waku transport;
+      // on the very first send. Only relevant for the real Logos Messaging transport;
       // skipped when a transport is injected (tests) so it doesn't slow them.
       if (!this.hasInjectedTransport) {
         await new Promise((r) => setTimeout(r, 2000));
@@ -137,7 +142,7 @@ export class BridgeManager extends EventEmitter {
       this.isRunning = true;
 
       // Poll the DB for outgoing messages written directly by external adapters
-      // (e.g. the Hermes gateway) and push them over Waku. Separate timer so it
+      // (e.g. the Hermes gateway) and push them over Logos Messaging. Separate timer so it
       // never interferes with discovery/announce or message handling.
       this.outboxTimer = setInterval(() => void this.processOutbox(), OUTBOX_POLL_INTERVAL_MS);
       this.outboxTimer.unref?.();
@@ -210,7 +215,7 @@ export class BridgeManager extends EventEmitter {
    * are written straight to the DB by external adapters (the Hermes gateway)
    * that never talk to the daemon, so the daemon is responsible for putting them
    * on the wire. Sent via `hivesync.sendMessage` directly (NOT `sendText`, which
-   * would re-persist the message). On a successful Waku send we mark it
+   * would re-persist the message). On a successful Logos Messaging send we mark it
    * delivered; if the send throws (e.g. a LightPush failure) we leave it
    * undelivered so the next poll retries.
    */
@@ -237,6 +242,10 @@ export class BridgeManager extends EventEmitter {
         }
 
         try {
+          // A re-publish is a new attempt: clear the previous receipt first
+          // (before sending, so the new ACK can't race the reset). Otherwise
+          // a 'rejected' from the first try would stick forever.
+          await this.storage.resetAck(message.id);
           await this.hivesync.sendMessage({
             // Reuse the outbox row id on the wire so the recipient stores it
             // under the same id the adapter logged.
@@ -280,7 +289,7 @@ export class BridgeManager extends EventEmitter {
       const trusted = this.isTrusted(message);
       if (!trusted) {
         await this.quarantineMessage(message);
-        return;
+        return 'quarantined';
       }
       await this.storage.saveMessage(message);
       this.emit('text', message);
@@ -293,7 +302,7 @@ export class BridgeManager extends EventEmitter {
       const msg: Message = message;
       if (!trusted) {
         await this.quarantineMessage(msg);
-        return;
+        return 'quarantined';
       }
       await this.storage.saveMessage(msg);
       this.emit('message', msg);
@@ -311,6 +320,19 @@ export class BridgeManager extends EventEmitter {
           `${message.sender} could not decrypt message ${originalMessageId} and dropped it — ` +
             `our pinned key for ${message.sender} likely doesn't match theirs; re-handshake`
         );
+      }
+      // Persist the receipt on our outbound row so agents and adapters can see
+      // it (read_conversation / message_status / the ack_status column) —
+      // "published" alone says nothing about whether the peer ingested it.
+      // Authenticity comes from recordAck: it only accepts receipts for
+      // messages we ENCRYPTED to the sender, i.e. to a key we had pinned — and
+      // the TOFU check upstream guarantees this ACK is signed by that same key.
+      // (Gating on handshake trust instead would drop every 'quarantined'
+      // receipt, since those come from peers that don't trust us yet.)
+      if (originalMessageId && ACK_STATUSES.has(status)) {
+        await this.storage
+          .recordAck(originalMessageId, message.sender, status as AckStatus)
+          .catch((e) => logger.debug(`Failed to record ACK for ${originalMessageId}:`, e));
       }
       // Surface delivery receipts so UIs / autoreply drivers can show a
       // "delivered"/"processed" marker and apply backpressure on 'deferred'.
@@ -530,6 +552,11 @@ export class BridgeManager extends EventEmitter {
   }
 
   /** Full text conversation (both directions) with one agent, oldest first. */
+  /** One stored message by id (including its delivery receipt, if any). */
+  async getMessage(id: string): Promise<Message | null> {
+    return this.storage.getMessage(id);
+  }
+
   async getConversation(peerId: string, limit = 500): Promise<Message[]> {
     return this.storage.getConversation(peerId, this.config.agentId, limit);
   }

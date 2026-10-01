@@ -197,6 +197,73 @@ describe('StorageManager', () => {
     });
   });
 
+  describe('Delivery receipts', () => {
+    const outbound = (id: string): Message => ({
+      id,
+      sender: 'me',
+      recipient: 'peer',
+      type: MessageType.TEXT,
+      content: { text: 'hi' },
+      timestamp: new Date(),
+      encrypted: true,
+    });
+
+    test('a new message has no receipt until the recipient ACKs it', async () => {
+      await storage.saveMessage(outbound('r-1'));
+      expect((await storage.getMessage('r-1'))!.ackStatus).toBeUndefined();
+      expect(await storage.recordAck('r-1', 'peer', 'queued')).toBe(true);
+      const m = await storage.getMessage('r-1');
+      expect(m!.ackStatus).toBe('queued');
+      expect(m!.ackedAt).toBeInstanceOf(Date);
+    });
+
+    test('only the message recipient can ACK it', async () => {
+      await storage.saveMessage(outbound('r-2'));
+      expect(await storage.recordAck('r-2', 'someone-else', 'processed')).toBe(false);
+      expect((await storage.getMessage('r-2'))!.ackStatus).toBeUndefined();
+    });
+
+    test('a late weaker receipt never masks a stronger one', async () => {
+      await storage.saveMessage(outbound('r-3'));
+      await storage.recordAck('r-3', 'peer', 'rejected');
+      expect(await storage.recordAck('r-3', 'peer', 'queued')).toBe(false);
+      expect(await storage.recordAck('r-3', 'peer', 'processed')).toBe(false);
+      expect((await storage.getMessage('r-3'))!.ackStatus).toBe('rejected');
+
+      await storage.saveMessage(outbound('r-4'));
+      await storage.recordAck('r-4', 'peer', 'queued');
+      expect(await storage.recordAck('r-4', 'peer', 'processed')).toBe(true);
+      expect((await storage.getMessage('r-4'))!.ackStatus).toBe('processed');
+    });
+
+    test('a plaintext send (recipient key never pinned) cannot carry a receipt', async () => {
+      await storage.saveMessage({ ...outbound('r-8'), encrypted: false });
+      expect(await storage.recordAck('r-8', 'peer', 'processed')).toBe(false);
+      expect((await storage.getMessage('r-8'))!.ackStatus).toBeUndefined();
+    });
+
+    test('an unknown status from the wire is ignored', async () => {
+      await storage.saveMessage(outbound('r-5'));
+      expect(await storage.recordAck('r-5', 'peer', 'bogus' as any)).toBe(false);
+      expect((await storage.getMessage('r-5'))!.ackStatus).toBeUndefined();
+    });
+
+    test('a re-publish clears a sticky failure so the new attempt can go green', async () => {
+      await storage.saveMessage(outbound('r-6'));
+      await storage.recordAck('r-6', 'peer', 'rejected');
+      await storage.resetAck('r-6');
+      expect(await storage.recordAck('r-6', 'peer', 'queued')).toBe(true);
+      expect((await storage.getMessage('r-6'))!.ackStatus).toBe('queued');
+    });
+
+    test('markDelivered stamps published_at', async () => {
+      await storage.saveMessage(outbound('r-7'));
+      expect((await storage.getMessage('r-7'))!.publishedAt).toBeUndefined();
+      await storage.markDelivered('r-7');
+      expect((await storage.getMessage('r-7'))!.publishedAt).toBeInstanceOf(Date);
+    });
+  });
+
   describe('Robustness', () => {
     test('should ignore duplicate message ids (network redelivery)', async () => {
       const msg: Message = {

@@ -6,7 +6,7 @@ Version 2.0.0 · Protocol envelope version 1
 
 ## 1. Message Envelope Format
 
-Every frame published to the Waku content topic is a UTF-8 JSON serialization of
+Every frame published to the Logos Messaging content topic is a UTF-8 JSON serialization of
 the following `Envelope` object.  All fields are required unless marked optional.
 
 ```typescript
@@ -470,7 +470,7 @@ local user) are written to isolated read-only files that are:
 ### 5.4 Deduplication
 
 A sliding window of 5000 seen message IDs (`seenIds` Set + `seenOrder` queue in
-`HiveSync`) prevents the same frame from being delivered twice even when Waku
+`HiveSync`) prevents the same frame from being delivered twice even when Logos Messaging
 relay nodes re-deliver it.  Self-originated frames are also filtered here.
 
 ---
@@ -544,7 +544,7 @@ waku:
   listenAddresses:
     - /ip4/0.0.0.0/tcp/0/ws    # local WebSocket listen address
   bootstrapNodes: []            # empty = use @waku/sdk default bootstrap fleet
-  clusterId: 1                  # The Waku Network
+  clusterId: 1                  # The Logos Messaging Network
   numShardsInCluster: 8
   contentTopic: /hivesync/1/agents/proto   # /{app}/{version}/{topic}/{encoding}
   keepAlive: true
@@ -705,13 +705,13 @@ touching disk.  Used when `storagePath = ':memory:'` (test / throwaway mode).
 
 ---
 
-## 10. Waku Network Configuration
+## 10. Logos Messaging Network Configuration
 
-HiveSync targets **The Waku Network** (cluster 1, 8 shards).
+HiveSync targets **The Logos Messaging Network** (cluster 1, 8 shards).
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `clusterId` | 1 | The Waku Network cluster |
+| `clusterId` | 1 | The Logos Messaging Network cluster |
 | `numShardsInCluster` | 8 | Auto-sharding shard count |
 | `contentTopic` | `/hivesync/1/agents/proto` | Application namespace |
 | `defaultBootstrap` | `true` (when `bootstrapNodes` is empty) | Use `@waku/sdk`'s built-in bootstrap fleet |

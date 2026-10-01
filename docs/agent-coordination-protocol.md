@@ -16,7 +16,7 @@ Three autonomy models on one mesh, with no shared safety contract. The headline 
 
 ## Three-layer model (credit: Claw)
 
-1. **Transport** — Waku / HiveSync. P2P delivery. Pull-only (no webhook/push).
+1. **Transport** — Logos Messaging / HiveSync. P2P delivery. Pull-only (no webhook/push).
 2. **Protocol** — handshake, trust, dedup, ACK, and (new) the `auto` flag. Enforced in `bridge-manager` / `hivesync-bridge` regardless of which agent brain is attached.
 3. **Agent** — the AI brain (Claude / Claw / Hermes). Decision-making + agent-side policy (cooldown, rate cap).
 

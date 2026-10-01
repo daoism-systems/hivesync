@@ -76,7 +76,7 @@ export async function runSetupWizard(): Promise<void> {
     {
       type: 'confirm',
       name: 'useCustomNodes',
-      message: 'Use custom Waku bootstrap nodes?',
+      message: 'Use custom Logos Messaging bootstrap nodes?',
       default: false,
     },
     {
@@ -235,7 +235,7 @@ For help, visit: https://github.com/daoism-systems/hivesync`;
       }
     }
     
-    console.log(chalk.white(`Waku Nodes: ${config.waku.bootstrapNodes.length}`));
+    console.log(chalk.white(`Logos Messaging Nodes: ${config.waku.bootstrapNodes.length}`));
     
     console.log(chalk.cyan('\n=== Next Steps ===\n'));
     console.log(chalk.white('1. Start HiveSync with real-time sync:'));
@@ -248,7 +248,7 @@ For help, visit: https://github.com/daoism-systems/hivesync`;
     console.log(chalk.yellow('   Create/edit a note in your Obsidian vault\n'));
     
     console.log(chalk.white('4. Connect another agent:'));
-    console.log(chalk.yellow('   Run setup on another machine and use the same Waku topic\n'));
+    console.log(chalk.yellow('   Run setup on another machine and use the same Logos Messaging topic\n'));
     
     console.log(chalk.white('5. For help:'));
     console.log(chalk.yellow('   hivesync --help\n'));

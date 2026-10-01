@@ -3,10 +3,10 @@ import * as path from 'path';
 
 /**
  * True end-to-end test: spawn two independent HiveSync agent *processes* that
- * connect to the real Waku network, discover each other, and exchange an
+ * connect to the real Logos Messaging network, discover each other, and exchange an
  * end-to-end-encrypted message.
  *
- * This depends on internet access and the public Waku fleet. Set
+ * This depends on internet access and the public Logos Messaging fleet. Set
  * HIVESYNC_SKIP_E2E=1 to skip (e.g. in an offline CI).
  */
 
@@ -59,9 +59,9 @@ function spawnAgent(
 
 const maybe = process.env.HIVESYNC_SKIP_E2E === '1' ? describe.skip : describe;
 
-maybe('HiveSync real-Waku e2e (two processes)', () => {
+maybe('HiveSync real Logos Messaging e2e (two processes)', () => {
   test(
-    'two agents discover each other and exchange an encrypted message over Waku',
+    'two agents discover each other and exchange an encrypted message over Logos Messaging',
     async () => {
       const token = `${Date.now().toString(36)}`;
       const topic = `/hivesync-e2e-${token}/1/agents/proto`;

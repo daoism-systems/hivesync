@@ -1,5 +1,5 @@
 /**
- * Orchestrates a multi-agent HiveSync sync demo over REAL Waku by spawning all
+ * Orchestrates a multi-agent HiveSync sync demo over REAL Logos Messaging by spawning all
  * agent processes (scripts/demo-sync.ts) at the SAME instant, so their fixed
  * discovery/broadcast windows are guaranteed to overlap. This is the difference
  * between this and launching agents by hand: no start-time skew.

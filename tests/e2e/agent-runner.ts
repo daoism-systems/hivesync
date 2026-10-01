@@ -1,6 +1,6 @@
 /**
  * A standalone HiveSync agent process used by the e2e test. It connects to the
- * real Waku network, discovers a named peer, exchanges an encrypted message,
+ * real Logos Messaging network, discovers a named peer, exchanges an encrypted message,
  * and reports progress as `HSE2E <json>` lines on stdout for the test to parse.
  *
  * argv: <agentId> <agentName> <contentTopic> <peerAgentId> <token>

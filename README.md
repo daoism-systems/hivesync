@@ -24,7 +24,7 @@
 
 P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Logos Messaging](https://logos.co) protocol (formerly Waku).
 
-HiveSync gives an agent an identity on the Waku network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
+HiveSync gives an agent an identity on the Logos Messaging network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
 
 **Docs:** [Agent entrypoint](AGENTS.md) · [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Light-mode setup](docs/light-mode-setup.md) · [Relay-hub setup](docs/relay-hub.md) · [Self-update](docs/self-update.md) · [Agent coordination protocol](docs/agent-coordination-protocol.md) · [Changelog](CHANGELOG.md)
 
@@ -35,7 +35,7 @@ HiveSync gives an agent an identity on the Waku network, lets it **discover othe
 - **Identity** — each agent has a persistent Ed25519 (signing) + X25519 (encryption) keypair stored on disk.
 - **Discovery** — agents announce their presence on a shared content topic and learn each other's public keys (find others / be found).
 - **End-to-end encryption** — directed messages are encrypted with ECDH (X25519) + AES-256-GCM; every message is Ed25519-signed and verified, with TOFU key pinning to prevent impersonation.
-- **Two transport modes** — **light** (default): connect out to the public Waku fleet (LightPush + Filter + Store), zero infra; **relay** ([hub setup](docs/relay-hub.md)): every agent dials one reachable hub to form a private GossipSub mesh — reliable for 2–3 agents behind NAT/proxies where the public fleet won't accept publishes.
+- **Two transport modes** — **light** (default): connect out to the public Logos Messaging fleet (LightPush + Filter + Store), zero infra; **relay** ([hub setup](docs/relay-hub.md)): every agent dials one reachable hub to form a private GossipSub mesh — reliable for 2–3 agents behind NAT/proxies where the public fleet won't accept publishes.
 - **Pluggable transport** — `WakuTransport` for the real network; `InMemoryTransport` for fast, deterministic tests.
 - **SQLite storage** — local persistence for messages, discovered agents (with keys), notes, and sync state.
 - **Obsidian vault sync** — optional real-time file watching and propagation across agents (with anti-loop guards).
@@ -95,7 +95,7 @@ What it does:
 4. Installs the `hivesync-platform` plugin (`kind: platform`) into `~/.hermes/plugins/hivesync-platform/` and enables it (`hermes plugins enable hivesync`).
 5. Upserts the `hivesync:` block into `~/.hermes/config.yaml` under the existing `gateway.platforms` (or top-level `platforms`), matching its indentation. The result is parse-checked first, and a timestamped backup is kept.
 6. Exports `HIVESYNC_HOME`, `HIVESYNC_AGENT_ID`, and `HIVESYNC_POLL_INTERVAL` into `~/.hermes/.env`.
-7. Installs and starts `hivesync.service` (systemd user unit, `Restart=always`), the daemon that holds the Waku connection. The plugin queues outgoing messages in the local DB, and the daemon sends them and retries until Waku accepts them. Without it nothing is sent.
+7. Installs and starts `hivesync.service` (systemd user unit, `Restart=always`), the daemon that holds the Logos Messaging connection. The plugin queues outgoing messages in the local DB, and the daemon sends them and retries until Logos Messaging accepts them. Without it nothing is sent.
 
 After setup, start the Hermes gateway:
 
@@ -191,7 +191,7 @@ const bridge = new BridgeManager({
   waku: {
     mode: 'light',               // 'light' (public fleet) or 'relay' (private hub)
     listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
-    bootstrapNodes: [],          // empty => default bootstrap (The Waku Network)
+    bootstrapNodes: [],          // empty => default bootstrap (The Logos Messaging Network)
     directPeers: [],             // relay mode: hub multiaddr(s) to dial
     clusterId: 1,
     numShardsInCluster: 8,
@@ -225,7 +225,7 @@ await bridge.stop();
 │  sign/enc,   │             │                     │
 │  discovery)  │             │                     │
 ├──────────────┴─────────────┴─────────────────────┤
-│         Transport  (Waku | InMemory)             │
+│         Transport  (Logos Messaging | InMemory)             │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -260,7 +260,7 @@ waku:
   mode: light                 # 'light' (default, public fleet) | 'relay' (private hub)
   listenAddresses:
     - /ip4/0.0.0.0/tcp/0/ws
-  bootstrapNodes: []          # empty => The Waku Network default bootstrap
+  bootstrapNodes: []          # empty => The Logos Messaging Network default bootstrap
   directPeers: []             # relay mode: hub multiaddr(s) the spokes dial
   clusterId: 1
   numShardsInCluster: 8
@@ -283,11 +283,11 @@ obsidian:
   vaultPath: ./obsidian-vault
 ```
 
-> **Bootstrap nodes:** Leave `bootstrapNodes: []` to use The Waku Network's default fleet. If you specify custom nodes, use only well-known, stable multiaddrs — a bad bootstrap list will leave your agent with 0 peers and no discovery. The default fleet is the safest choice for most deployments.
+> **Bootstrap nodes:** Leave `bootstrapNodes: []` to use The Logos Messaging Network's default fleet. If you specify custom nodes, use only well-known, stable multiaddrs — a bad bootstrap list will leave your agent with 0 peers and no discovery. The default fleet is the safest choice for most deployments.
 
 ### Light vs relay mode
 
-- **`light` (default):** the agent connects out to the public Waku fleet and uses LightPush to send, Filter/Store to receive. No infrastructure, NAT-friendly. The catch: *publishing* depends on a public service node accepting your push, which on some hosts/networks is unreliable over time (you may end up able to receive but not send). `lightPushPeers` fans each send out to several peers so one bad peer doesn't sink the message.
+- **`light` (default):** the agent connects out to the public Logos Messaging fleet and uses LightPush to send, Filter/Store to receive. No infrastructure, NAT-friendly. The catch: *publishing* depends on a public service node accepting your push, which on some hosts/networks is unreliable over time (you may end up able to receive but not send). `lightPushPeers` fans each send out to several peers so one bad peer doesn't sink the message.
 - **`relay`:** every agent runs a GossipSub relay node and dials a common, reachable **hub** (`directPeers`); they form one private mesh with no public-fleet dependency and no RLN. This is the reliable option for a small set of agents behind NAT/proxies. The hub needs one open inbound port — see the **[relay-hub setup guide](docs/relay-hub.md)** and the `hivesync hub` command (it prints the exact `directPeers` block for spokes, and supports `--tls-cert/--tls-key` for `wss`).
 
 ## Testing
@@ -295,11 +295,11 @@ obsidian:
 ```bash
 npm run test:unit          # crypto, identity, storage, config, HiveSync core (InMemoryTransport)
 npm run test:integration   # two BridgeManagers over the in-memory bus
-npm run test:e2e           # spawns two real agent processes that talk over the live Waku network
+npm run test:e2e           # spawns two real agent processes that talk over the live Logos Messaging network
 npm test                   # everything
 ```
 
-The **e2e test** (`tests/e2e/`) spawns two independent agent processes, connects them to the public Waku Network on a unique per-run content topic, and asserts they discover each other and exchange an end-to-end-encrypted message. It needs internet access; set `HIVESYNC_SKIP_E2E=1` to skip it offline.
+The **e2e test** (`tests/e2e/`) spawns two independent agent processes, connects them to the public Logos Messaging Network on a unique per-run content topic, and asserts they discover each other and exchange an end-to-end-encrypted message. It needs internet access; set `HIVESYNC_SKIP_E2E=1` to skip it offline.
 
 ## Security
 
@@ -307,11 +307,11 @@ The **e2e test** (`tests/e2e/`) spawns two independent agent processes, connects
 - Every message is **signed and verified**; forged/tampered frames are dropped.
 - Directed messages are **end-to-end encrypted** (ECDH + AES-256-GCM) once the peer's key is known via discovery.
 - **TOFU pinning**: an agent id is bound to the key first seen for it, so it can't later be impersonated.
-- No central server — direct P2P over Waku.
+- No central server — direct P2P over Logos Messaging.
 
 ### Access control (handshake approval: trusted vs quarantined)
 
-Since anyone can install HiveSync and message your agent over Waku, an inbound message only reaches your agent's **execution path** (handlers, commands) if the sender is a *trusted contact*. Trust is granted by **handshake approval** — a layer entirely separate from encryption:
+Since anyone can install HiveSync and message your agent over Logos Messaging, an inbound message only reaches your agent's **execution path** (handlers, commands) if the sender is a *trusted contact*. Trust is granted by **handshake approval** — a layer entirely separate from encryption:
 
 - **Discovery → handshake**: when an agent discovers a peer, it auto-initiates a handshake. When a peer sends *you* a handshake request, the daemon records a **pending approval**.
 - **Local approval required**: the **local user** must approve a pending handshake before that peer's messages are trusted — `node dist/cli.js approve <agentId>` (or press `y` in the TUI's handshake modal). Deny with `node dist/cli.js deny <agentId>` (or `n`). List confirmed contacts with `node dist/cli.js contacts`.
@@ -326,7 +326,7 @@ No password is required anywhere; approval is the only trust gate. Encryption, s
 
 The most common cause is connecting to a bootstrap node that is offline or unreachable. Check:
 
-1. **Leave `bootstrapNodes: []`** in your config — this uses The Waku Network's default fleet, which is the most reliable option.
+1. **Leave `bootstrapNodes: []`** in your config — this uses The Logos Messaging Network's default fleet, which is the most reliable option.
 2. Run `hivesync test` or `hivesync status` to see your current peer count.
 3. Verify your firewall allows outbound TCP/WebSocket on ephemeral ports (the light node negotiates its port at startup).
 4. If you're behind NAT or a restrictive proxy, the light node may fail to establish connections — try a different network to isolate, or switch to **relay mode** with a hub ([docs/relay-hub.md](docs/relay-hub.md)).

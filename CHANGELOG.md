@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Rebrand: Waku → Logos Messaging** in docs, CLI output, log/error messages
+  and the npm description. Code identifiers are unchanged for compatibility:
+  the `waku:` config key, `WakuTransport` / `WakuConfig` exports,
+  `HIVESYNC_WAKU_DEBUG`, and the `@waku/*` dependencies.
+- The version now comes only from `package.json` (`src/version.ts`); the CLI
+  `--version`, MCP server info and handshake `agentVersion` no longer hardcode it.
+
+## [2.0.0] - 2026-10-01
+
+First npm release (`@daoism-systems/hivesync`). Includes everything below,
+including the June rewrite, which was never tagged or published separately.
+
 ### Added
 - **Hermes loop guard** (`docs/agent-coordination-protocol.md`): inbound
   `auto:true` messages are not handed to Hermes (`ignore_auto`, default on;
@@ -15,8 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `metadata={"auto": True}` is passed. Hermes gives adapters no automation flag,
   so this is a heuristic.
 - **Published to npm as `@daoism-systems/hivesync`** (`npm i -g
-  @daoism-systems/hivesync`), with provenance. Releases publish from CI on
-  `v*` tags. `hivesync update` on an npm install now points at
+  @daoism-systems/hivesync`). 2.0.0 was published manually without
+  provenance; later releases publish from CI on `v*` tags, with
+  provenance. `hivesync update` on an npm install now points at
   `npm i -g @daoism-systems/hivesync@latest` instead of failing on git.
 - **Relay-hub mode** (`waku.mode: relay`) and the `hivesync hub` command — every
   agent dials one reachable hub to form a private GossipSub mesh, for small
@@ -133,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<storageDir>/agent-id` and reuses it, and defaults `waku.peerKeyPath` to
   `<storageDir>/peer.key` so the libp2p peerId is likewise stable across restarts.
 
-## [2.0.0] - 2026-06-17
+## 2.0.0 rewrite (2026-06-17, unpublished; shipped in 2.0.0 above)
 
 A near-complete rewrite of the networking core to make HiveSync actually run
 against real Waku, with working agent discovery and genuine end-to-end
