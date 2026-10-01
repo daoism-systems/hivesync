@@ -297,7 +297,7 @@ export class StorageManager {
   }
 
   /**
-   * Outgoing messages we authored that haven't been sent over Waku yet. These
+   * Outgoing messages we authored that haven't been sent over Logos Messaging yet. These
    * are typically written directly to the DB by external adapters (e.g. Hermes)
    * which never contact the daemon; the outbox poller picks them up and sends.
    */
@@ -310,7 +310,7 @@ export class StorageManager {
   }
 
   /**
-   * Mark an outgoing message as published (accepted by >=1 Waku peer) and stamp
+   * Mark an outgoing message as published (accepted by >=1 Logos Messaging peer) and stamp
    * published_at — the clock receipt timeouts start from. Published is NOT
    * received: that is what ack_status is for.
    */

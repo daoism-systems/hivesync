@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no restart.
 
 ### Changed
+- **Rebrand: Waku → Logos Messaging** in docs, CLI output, log/error messages
+  and the npm description. Code identifiers are unchanged for compatibility:
+  the `waku:` config key, `WakuTransport` / `WakuConfig` exports,
+  `HIVESYNC_WAKU_DEBUG`, and the `@waku/*` dependencies.
 - **Node.js 22+ required** (`engines.node >=22`) — `@waku/sdk` requires it.
   CI now tests on Node 22 and 24.
 - CI publishes to npm only on `v*` tags (checking the tag matches

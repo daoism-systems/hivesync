@@ -3,7 +3,7 @@
 ## Why
 
 HiveSync's default **light mode** (LightPush + Filter + Store) depends on the
-public Waku fleet *accepting your publishes*. On constrained hosts (NAT'd VPSs
+public Logos Messaging fleet *accepting your publishes*. On constrained hosts (NAT'd VPSs
 behind the Aleph proxy, a Steam Deck on home NAT) that turned out to be
 unreliable over time: LightPush gets `505 NO_PEERS` ("the service node has no
 relay peers on our shard"), streams reset, and even when fan-out to multiple

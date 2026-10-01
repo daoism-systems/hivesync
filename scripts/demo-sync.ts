@@ -1,8 +1,8 @@
 /**
- * Multi-agent HiveSync demo over REAL Waku.
+ * Multi-agent HiveSync demo over REAL Logos Messaging.
  *
  * Each invocation runs ONE agent. The agent:
- *   1. connects to the public Waku Network (light node),
+ *   1. connects to the public Logos Messaging Network (light node),
  *   2. discovers its named peers and completes mutual handshakes,
  *   3. seeds its local SQLite DB with a few records,
  *   4. broadcasts each record to the peers and stores records it receives,
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
 
   // HiveSync only TRUSTS (stores, rather than quarantines) messages from a peer
   // whose handshake is confirmed; un-handshaked peers are quarantined. The
-  // handshake_init is itself a Waku message that may take several tries to
+  // handshake_init is itself a Logos Messaging message that may take several tries to
   // arrive, so we fold approval INTO the main loop and keep approving — and
   // keep resending — until the DB converges. This mirrors the working e2e.
   const approved = new Set<string>();

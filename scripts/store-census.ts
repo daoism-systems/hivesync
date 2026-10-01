@@ -54,7 +54,7 @@ async function main(): Promise<void> {
         const env = JSON.parse(new TextDecoder().decode(msg.payload));
         const key = `${env.from} -> ${env.to}  [${env.type}]`;
         byPair.set(key, (byPair.get(key) ?? 0) + 1);
-        // Waku-level timestamp (ns Date) — envelope field names vary.
+        // Message-level timestamp (ns Date) — envelope field names vary.
         const at = msg.timestamp ? new Date(msg.timestamp).toISOString() : '';
         // CENSUS_MATCH=<substring>: print each matching envelope (id, time, route)
         // to trace a single message end to end.

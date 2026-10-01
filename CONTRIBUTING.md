@@ -73,7 +73,7 @@ npm run coverage
 ## Project Structure
 ```
 src/              # Source code
-├── core/         # Bridge, transport (Waku/InMemory), identity, crypto, self-update
+├── core/         # Bridge, transport (Logos Messaging/InMemory), identity, crypto, self-update
 ├── storage/      # SQLite storage + quarantine store
 ├── sync/         # Obsidian real-time sync
 ├── utils/        # Config, logger, TUI
@@ -84,7 +84,7 @@ src/              # Source code
 tests/            # Test suites
 ├── unit/         # Unit tests
 ├── integration/  # Two BridgeManagers over the in-memory bus
-└── e2e/          # Two real processes over the live Waku network
+└── e2e/          # Two real processes over the live Logos Messaging network
 
 scripts/          # Diagnostics, demos, and the on-message hook example
 docs/             # Setup guides (light mode, relay hub, self-update, protocol)

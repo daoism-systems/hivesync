@@ -14,7 +14,7 @@ import { BridgeConfig, AgentIdentity, AckStatus, Message, MessageType, Quarantin
 import { HandshakeInfo } from './hivesync-bridge';
 import { logger } from '../utils/logger';
 
-// How often the outbox poller checks the DB for messages to push over Waku.
+// How often the outbox poller checks the DB for messages to push over Logos Messaging.
 const OUTBOX_POLL_INTERVAL_MS = 2000;
 
 /** Receipt statuses we persist; anything else a peer sends is ignored. */
@@ -50,7 +50,7 @@ export class BridgeManager extends EventEmitter {
   private processingOutbox = false;
   private isRunning = false;
   // True when a transport was injected (tests use InMemoryTransport). The
-  // Waku-fleet startup delay below is meaningless for an in-process transport
+  // public-fleet startup delay below is meaningless for an in-process transport
   // and would only slow tests, so we skip it in that case.
   private readonly hasInjectedTransport: boolean;
 
@@ -117,7 +117,7 @@ export class BridgeManager extends EventEmitter {
 
       // Brief pause so the first LightPush epoch can stabilise before the
       // initial announce/sync burst fires — prevents rate-limit rejection
-      // on the very first send. Only relevant for the real Waku transport;
+      // on the very first send. Only relevant for the real Logos Messaging transport;
       // skipped when a transport is injected (tests) so it doesn't slow them.
       if (!this.hasInjectedTransport) {
         await new Promise((r) => setTimeout(r, 2000));
@@ -142,7 +142,7 @@ export class BridgeManager extends EventEmitter {
       this.isRunning = true;
 
       // Poll the DB for outgoing messages written directly by external adapters
-      // (e.g. the Hermes gateway) and push them over Waku. Separate timer so it
+      // (e.g. the Hermes gateway) and push them over Logos Messaging. Separate timer so it
       // never interferes with discovery/announce or message handling.
       this.outboxTimer = setInterval(() => void this.processOutbox(), OUTBOX_POLL_INTERVAL_MS);
       this.outboxTimer.unref?.();
@@ -215,7 +215,7 @@ export class BridgeManager extends EventEmitter {
    * are written straight to the DB by external adapters (the Hermes gateway)
    * that never talk to the daemon, so the daemon is responsible for putting them
    * on the wire. Sent via `hivesync.sendMessage` directly (NOT `sendText`, which
-   * would re-persist the message). On a successful Waku send we mark it
+   * would re-persist the message). On a successful Logos Messaging send we mark it
    * delivered; if the send throws (e.g. a LightPush failure) we leave it
    * undelivered so the next poll retries.
    */

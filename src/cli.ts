@@ -633,7 +633,7 @@ program
     }
     
     console.log(chalk.cyan('\n=== Test Complete ===\n'));
-    // Waku leaves timers pending after stop(); exit explicitly (see stopAndExit).
+    // Logos Messaging leaves timers pending after stop(); exit explicitly (see stopAndExit).
     process.exit(failed ? 1 : 0);
   });
 

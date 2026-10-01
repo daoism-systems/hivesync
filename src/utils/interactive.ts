@@ -24,7 +24,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
         console.log(chalk.cyan('\n=== Bridge Status ===\n'));
         console.log(chalk.white(`Agent: ${status.agentName} (${status.agentId})`));
         console.log(chalk.white(`Running: ${status.running ? 'yes' : 'no'}`));
-        console.log(chalk.white(`Waku Connected: ${status.hivesync.connected ? 'yes' : 'no'}`));
+        console.log(chalk.white(`Logos Messaging Connected: ${status.hivesync.connected ? 'yes' : 'no'}`));
         console.log(chalk.white(`Peer ID: ${status.hivesync.peerId || 'N/A'}`));
         console.log(chalk.white(`Active peers: ${status.hivesync.peers}`));
         console.log(chalk.white(`Known agents: ${status.hivesync.knownAgents}`));
@@ -114,7 +114,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
 
       case 'clear':
         console.clear();
-        console.log(chalk.cyan('=== Waku Bridge ===\n'));
+        console.log(chalk.cyan('=== Logos Messaging Bridge ===\n'));
         break;
 
       case 'exit':

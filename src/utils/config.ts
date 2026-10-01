@@ -12,7 +12,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
   syncInterval: 30,
   waku: {
     listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
-    // Empty => use @waku/sdk's default bootstrap (The Waku Network).
+    // Empty => use @waku/sdk's default bootstrap (The Logos Messaging Network).
     bootstrapNodes: [],
     directPeers: [],
     clusterId: 1,
@@ -160,13 +160,13 @@ export function validateConfig(config: BridgeConfig): string[] {
     errors.push('Sync interval must be positive');
   }
 
-  // A Waku content topic must look like /{app}/{version}/{topic}/{encoding}.
+  // A Logos Messaging content topic must look like /{app}/{version}/{topic}/{encoding}.
   if (!config.waku?.contentTopic || !/^\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(config.waku.contentTopic)) {
-    errors.push('A valid Waku content topic (/{app}/{version}/{topic}/{encoding}) is required');
+    errors.push('A valid Logos Messaging content topic (/{app}/{version}/{topic}/{encoding}) is required');
   }
 
   if (!config.waku?.clusterId && config.waku?.clusterId !== 0) {
-    errors.push('Waku clusterId is required');
+    errors.push('Logos Messaging clusterId is required');
   }
 
   return errors;

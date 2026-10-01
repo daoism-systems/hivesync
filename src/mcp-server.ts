@@ -58,7 +58,7 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
   const z = zodMod.z ?? zodMod.default;
 
   // Bring the agent online in the BACKGROUND so the MCP server is responsive
-  // immediately (the Waku connect can take ~10-30s; we don't want to stall the
+  // immediately (the Logos Messaging connect can take ~10-30s; we don't want to stall the
   // client's initialize). Tools that need the live bridge await `ready`; the
   // `health` tool reports current status without blocking, so a client can see
   // "connecting / 0 peers" before it tries to send.
@@ -89,7 +89,7 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       title: 'HiveSync health / peers',
       description:
         'Connection status of this HiveSync agent: connected, this agent id, libp2p peerId, ' +
-        'number of connected Waku peers, and known-agent count. Call this BEFORE sending so ' +
+        'number of connected Logos Messaging peers, and known-agent count. Call this BEFORE sending so ' +
         'you do not publish into a dead channel (0 peers = not connected yet).',
       inputSchema: {},
     },

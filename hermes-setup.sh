@@ -147,7 +147,7 @@ PYEOF
 cat > "${PLUGIN_DIR}/plugin.yaml" << YAML
 name: hivesync
 label: HiveSync
-description: "P2P messaging gateway platform built on the Waku protocol"
+description: "P2P messaging gateway platform built on the Logos Messaging protocol"
 version: 1.0.0
 author: HiveSync
 license: MIT
@@ -295,7 +295,7 @@ ok "Environment variables written to ~/.hermes/.env"
 
 # ── 9. HiveSync daemon (systemd user service) ────────────────────────────────
 # The adapter only queues outgoing messages in the DB; this long-lived daemon
-# holds the Waku connection, drains that outbox and retries until delivery.
+# holds the Logos Messaging connection, drains that outbox and retries until delivery.
 header "Setting up the HiveSync daemon"
 
 SERVICE_FILE="${HOME}/.config/systemd/user/hivesync.service"

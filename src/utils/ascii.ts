@@ -82,7 +82,7 @@ export function printBanner(): void {
     chalk.hex(TG.muted)('  ·  ') +
     chalk.hex(TG.blueLight)('🔒 e2e-encrypted') +
     chalk.hex(TG.muted)('  ·  ') +
-    chalk.hex(TG.blueLight)('🐝 Waku swarm');
+    chalk.hex(TG.blueLight)('🐝 Logos Messaging swarm');
   console.log(tag);
   console.log(chalk.hex(TG.muted)('  ' + '─'.repeat(54)));
   console.log();

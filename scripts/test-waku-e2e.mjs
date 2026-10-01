@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * HiveSync Waku E2E Test
+ * HiveSync Logos Messaging E2E Test
  *
- * Creates TWO independent Waku relay nodes on localhost,
+ * Creates TWO independent Logos Messaging relay nodes on localhost,
  * has them communicate bidirectionally via the Relay protocol.
  *
  * Both nodes connect to our daemon (port 16000) as a direct peer,
@@ -33,7 +33,7 @@ async function sleep(ms) {
 }
 
 /**
- * Create a hybrid Waku relay+filter node manually.
+ * Create a hybrid Logos Messaging relay+filter node manually.
  * Both nodes MUST have filterMultiaddrs: false so they can
  * dial plain WebSocket addresses (not just WSS).
  */
@@ -94,7 +94,7 @@ async function waitForMesh(node, pubsubTopic, minPeers, timeoutMs) {
 
 async function main() {
   console.log('═'.repeat(60));
-  console.log('  HiveSync Waku E2E Test');
+  console.log('  HiveSync Logos Messaging E2E Test');
   console.log(`  Relay: ${RELAY_ADDR}`);
   console.log(`  Content Topic: ${CONTENT_TOPIC}`);
   console.log('═'.repeat(60));

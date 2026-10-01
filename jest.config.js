@@ -11,8 +11,8 @@ module.exports = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
-  // No Waku mock: unit/integration tests inject InMemoryTransport, and the e2e
-  // suite spawns real processes that talk to the live Waku network.
+  // No Logos Messaging mock: unit/integration tests inject InMemoryTransport, and the e2e
+  // suite spawns real processes that talk to the live Logos Messaging network.
   transform: {
     '^.+\\.tsx?$': ['ts-jest', { diagnostics: false }],
   },

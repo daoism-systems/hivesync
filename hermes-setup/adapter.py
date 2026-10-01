@@ -2,7 +2,7 @@
 HiveSync Platform Adapter for Hermes Agent.
 
 Plugin-based gateway adapter that polls a local HiveSync daemon's SQLite
-database and relays messages to/from the Hermes agent over the Waku P2P
+database and relays messages to/from the Hermes agent over the Logos Messaging P2P
 network.
 
 Configuration in config.yaml::
@@ -91,7 +91,7 @@ def _enqueue_hivesync(db_path, sender, recipient, message, auto=False):
     """Queue a message in the HiveSync outbox for the long-lived daemon to send.
 
     The daemon (`hivesync start`) drains rows with sender=<us> AND delivered=0
-    every ~2s and retries until Waku accepts them (BridgeManager.processOutbox).
+    every ~2s and retries until Logos Messaging accepts them (BridgeManager.processOutbox).
     Spawning the CLI per message instead starts a second short-lived libp2p
     node, blocks for a full sync round, and loses the message if that process
     dies mid-retry.
@@ -422,7 +422,7 @@ def register(ctx):
         allow_update_command=True,
         platform_hint=(
             "You are chatting over HiveSync, a P2P messaging protocol built on "
-            "the Waku network. Messages are end-to-end encrypted and delivered "
+            "the Logos Messaging network. Messages are end-to-end encrypted and delivered "
             "through a local daemon. You can use markdown formatting in your "
             "responses. Each chat is a DM with a specific agent identified by "
             "their agent ID. Messages may be delayed by up to 30 seconds "

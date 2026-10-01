@@ -118,7 +118,7 @@ export interface Contact {
 }
 
 /**
- * The on-the-wire frame published to the Waku content topic. JSON-serializable
+ * The on-the-wire frame published to the Logos Messaging content topic. JSON-serializable
  * (no Date objects, no Buffers) so it round-trips losslessly.
  */
 export interface Envelope {
@@ -187,7 +187,7 @@ export interface SyncState {
 export interface WakuConfig {
   /**
    * Transport mode.
-   * - 'light' (default): connect out to the public Waku fleet (LightPush +
+   * - 'light' (default): connect out to the public Logos Messaging fleet (LightPush +
    *   Filter + Store). Zero infra, but publishing depends on a public service
    *   node accepting our push — unreliable on some hosts/networks over time.
    * - 'relay': run a GossipSub relay node and connect all agents to a common
@@ -202,7 +202,7 @@ export interface WakuConfig {
    * the hub, e.g. ['/ip4/1.2.3.4/tcp/443/ws/p2p/16Uiu2HA...'].
    */
   directPeers: string[];
-  /** Waku cluster id (The Waku Network is cluster 1). */
+  /** Logos Messaging cluster id (The Logos Messaging Network is cluster 1). */
   clusterId: number;
   /** Number of shards in the (auto-sharding) cluster. */
   numShardsInCluster: number;

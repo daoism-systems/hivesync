@@ -14,8 +14,8 @@ well as a programmatic API consumed by the Hermes agent plugin.
 
 ```mermaid
 graph TB
-    subgraph P2P["Waku P2P Network (The Waku Network, cluster 1)"]
-        WN["Waku relay nodes\n(LightPush + Filter)"]
+    subgraph P2P["Logos Messaging P2P Network (The Logos Messaging Network, cluster 1)"]
+        WN["Logos Messaging relay nodes\n(LightPush + Filter)"]
     end
 
     subgraph Transport["Transport Layer"]
@@ -87,7 +87,7 @@ sequenceDiagram
     participant HS as HiveSync
     participant ID as Identity
     participant WT as WakuTransport
-    participant NET as Waku Network
+    participant NET as Logos Messaging Network
     participant HS2 as Remote HiveSync
     participant BM2 as Remote BridgeManager
     participant U2 as Remote User
@@ -185,12 +185,12 @@ wire; everything above it works with structured `Envelope` objects.
 **`WakuTransport`** wraps `@waku/sdk`.  Because `@waku/sdk` is ESM-only and the
 project compiles to CommonJS, the SDK is loaded lazily with a `new Function('return
 import("@waku/sdk")')()` trick, cached in a module-level promise.  On startup it
-creates a **light node** that dials The Waku Network bootstrap fleet, then waits
+creates a **light node** that dials The Logos Messaging Network bootstrap fleet, then waits
 for at least one peer that supports both `LightPush` (for sending) and `Filter`
 (for receiving) protocols.
 
 Publishing retries up to 5 times with 1.5 s × attempt back-off; a partial success
-(≥1 peer accepted the push) is treated as delivered, matching real-world Waku
+(≥1 peer accepted the push) is treated as delivered, matching real-world Logos Messaging
 behaviour where RLN rate-limiting causes some peers to reject pushes.
 
 **`InMemoryTransport`** is a deterministic in-process bus keyed by content topic.
@@ -248,7 +248,7 @@ seconds.  When a previously-unseen agent is discovered, HiveSync fires a reply
 announce so the newcomer learns about us promptly.
 
 **Deduplication**: a sliding window of 5000 seen message IDs prevents processing
-the same frame twice (Waku can re-deliver frames across relay nodes).
+the same frame twice (Logos Messaging can re-deliver frames across relay nodes).
 
 ---
 
