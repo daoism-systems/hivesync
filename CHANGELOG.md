@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-01
+
 ### Changed
 - **Rebrand: Waku → Logos Messaging** in docs, CLI output, log/error messages
   and the npm description. Code identifiers are unchanged for compatibility:
