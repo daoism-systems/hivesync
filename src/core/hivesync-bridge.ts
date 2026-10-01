@@ -17,6 +17,7 @@ import { fingerprint } from './crypto';
 import { Transport } from './transport';
 import { WakuTransport } from './waku-transport';
 import { logger } from '../utils/logger';
+import { VERSION } from '../version';
 
 const ENVELOPE_VERSION = 1;
 const BROADCAST = 'broadcast';
@@ -30,7 +31,7 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 30;
 
 /** Our advertised protocol version and capabilities, sent in handshakes. */
-const AGENT_VERSION = '2.0.0';
+const AGENT_VERSION = VERSION;
 const AGENT_CAPABILITIES = ['text', 'file', 'command', 'sync', 'obsidian'];
 
 /** Delay before auto-initiating a handshake on a fresh discovery. */

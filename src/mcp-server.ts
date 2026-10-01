@@ -16,6 +16,7 @@
 import { BridgeManager } from './core/bridge-manager';
 import type { BridgeConfig, Message } from './types';
 import { logger } from './utils/logger';
+import { VERSION } from './version';
 
 // eslint-disable-next-line @typescript-eslint/no-implied-eval
 const imp = (m: string): Promise<any> => new Function(`return import(${JSON.stringify(m)})`)();
@@ -73,7 +74,7 @@ export async function startMcpServer(config: BridgeConfig): Promise<void> {
       throw e;
     });
 
-  const server = new McpServer({ name: 'hivesync', version: '2.0.0' });
+  const server = new McpServer({ name: 'hivesync', version: VERSION });
   const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
   const json = (v: unknown) => text(JSON.stringify(v, null, 2));
   // Wrap handlers that need the bridge connected.

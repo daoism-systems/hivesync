@@ -15,6 +15,7 @@ import { startMcpServer } from './mcp-server';
 import { runSetupWizard } from './setup-wizard';
 import { printBanner } from './utils/ascii';
 import { runConnectSequence } from './utils/splash';
+import { VERSION } from './version';
 
 const program = new Command();
 
@@ -65,7 +66,7 @@ if (!isInteractiveStart) {
 program
   .name('hivesync')
   .description('Real-time secure HiveSync communication bridge for AI agents')
-  .version('2.0.0');
+  .version(VERSION);
 
 program
   .command('start')
