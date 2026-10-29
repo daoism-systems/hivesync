@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chokidar from 'chokidar';
 import { logger } from '../utils/logger';
+import { resolveVaultPath, writeVaultFile } from './vault-path';
 
 export interface FileChangeEvent {
   type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir';
@@ -185,25 +186,19 @@ export class FileWatcher {
   }
 
   async getNoteContent(filePath: string): Promise<string> {
-    const fullPath = path.join(this.vaultPath, filePath);
+    const fullPath = resolveVaultPath(this.vaultPath, filePath);
     return fs.readFileSync(fullPath, 'utf-8');
   }
 
+  // Paths reaching save/delete can come from peers: resolveVaultPath refuses
+  // anything that would land outside the vault or on a non-note file.
   async saveNoteContent(filePath: string, content: string): Promise<void> {
-    const fullPath = path.join(this.vaultPath, filePath);
-    const dir = path.dirname(fullPath);
-    
-    // Ensure directory exists
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    fs.writeFileSync(fullPath, content, 'utf-8');
+    writeVaultFile(this.vaultPath, filePath, content);
   }
 
   async deleteNote(filePath: string): Promise<void> {
-    const fullPath = path.join(this.vaultPath, filePath);
-    
+    const fullPath = resolveVaultPath(this.vaultPath, filePath);
+
     if (fs.existsSync(fullPath)) {
       fs.unlinkSync(fullPath);
       

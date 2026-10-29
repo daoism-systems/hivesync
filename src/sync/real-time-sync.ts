@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
+import { isSafeVaultPath } from './vault-path';
 
 export class RealTimeSyncManager {
   private bridge: HiveSync;
@@ -252,6 +253,13 @@ export class RealTimeSyncManager {
         hash: noteData.hash,
       };
 
+      // Peer-supplied path: skip (don't write, delete or store) anything
+      // that would land outside the vault or on a non-note file.
+      if (!isSafeVaultPath(this.vaultPath, note.path)) {
+        logger.warn(`Skipping update with unsafe path ${JSON.stringify(note.path)} from ${sender}`);
+        continue;
+      }
+
       // Skip deleted notes
       if (note.hash === 'DELETED') {
         if (this.fileWatcher) {
@@ -348,6 +356,12 @@ export class RealTimeSyncManager {
         lastModified: new Date(noteData.lastModified),
         hash: noteData.hash,
       };
+
+      // Peer-supplied path: skip (don't write or store) anything outside the vault.
+      if (!isSafeVaultPath(this.vaultPath, note.path)) {
+        logger.warn(`Skipping note with unsafe path ${JSON.stringify(note.path)} from ${sender}`);
+        continue;
+      }
 
       // Check for conflicts
       const existingNote = await this.storage.getNoteByPath(note.path);
