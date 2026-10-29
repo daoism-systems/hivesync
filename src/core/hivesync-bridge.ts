@@ -37,6 +37,19 @@ const AGENT_CAPABILITIES = ['text', 'file', 'command', 'sync', 'obsidian'];
 /** Delay before auto-initiating a handshake on a fresh discovery. */
 const HANDSHAKE_INIT_DELAY_MS = 1000;
 
+// Hard block for peers known to be malicious. Frames from these
+// agents are dropped before any handling, they can never be approved, and stored
+// trust for them is not restored. Matched by agentId AND signing-key fingerprint,
+// since an agentId is self-chosen and a renamed key must stay blocked too.
+const BLOCKED_AGENT_IDS: ReadonlySet<string> = new Set(['claude-code-aux']);
+const BLOCKED_KEY_IDS: ReadonlySet<string> = new Set([
+  'kGtHkwaRVGyRZOrbVMTPVPN7', // claude-code-aux
+]);
+
+export function isBlockedAgent(agentId: string, keyId?: string): boolean {
+  return BLOCKED_AGENT_IDS.has(agentId) || (keyId !== undefined && BLOCKED_KEY_IDS.has(keyId));
+}
+
 /** What we learn (and pin) about another agent on the network. */
 interface KnownAgent {
   agentId: string;
@@ -196,6 +209,10 @@ export class HiveSync {
     }>,
   ): void {
     for (const a of agents) {
+      if (isBlockedAgent(a.id, a.publicKey ? fingerprint(a.publicKey) : undefined)) {
+        logger.warn(`Not restoring trust for blocked agent ${a.id}`);
+        continue;
+      }
       if (a.handshakeStatus === 'confirmed') {
         this.knownAgents.set(a.id, {
           agentId: a.id,
@@ -293,6 +310,10 @@ export class HiveSync {
 
     // TOFU: pin agentId -> signing key. Reject if a known agent's key changed.
     const keyId = fingerprint(envelope.spk);
+    if (isBlockedAgent(envelope.from, keyId)) {
+      logger.warn(`Dropping message ${envelope.id}: blocked agent ${envelope.from} (key ${keyId})`);
+      return;
+    }
     const pinned = this.knownAgents.get(envelope.from);
     if (pinned && pinned.keyId !== keyId) {
       logger.warn(`Dropping message ${envelope.id}: key mismatch for ${envelope.from} (possible impersonation)`);
@@ -591,20 +612,23 @@ export class HiveSync {
     const capabilities = Array.isArray(payload.capabilities) ? payload.capabilities : [];
     if (known) {
       known.capabilities = capabilities;
-      if (payload.accepted) {
-        known.handshakeStatus = 'confirmed';
-        known.handshakeConfirmedAt = new Date();
-      } else if (payload.reason === 'pending_approval') {
-        // Their approval of us is pending; our trust in them is our own
-        // decision and must not be downgraded by it.
-        if (known.handshakeStatus !== 'confirmed') known.handshakeStatus = 'pending';
-      } else {
+      // An ack says what the PEER decided about US. It must never promote the
+      // peer to trusted here: only local approval (completeHandshakeApproval)
+      // does that. Promoting on `accepted` let any discovered peer make itself
+      // trusted by answering our auto-initiated handshake (or sending an
+      // unsolicited ack).
+      if (!payload.accepted && payload.reason !== 'pending_approval') {
         known.handshakeStatus = 'failed';
+      } else if (known.handshakeStatus !== 'confirmed') {
+        known.handshakeStatus = 'pending';
       }
     }
     if (payload.accepted) {
-      logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
-      await this.notifyHandshakeConfirmed(from);
+      if (known?.handshakeStatus === 'confirmed') {
+        logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
+      } else {
+        logger.info(`${payload.agentName ?? from} (${from}) accepted us — still awaiting local approval`);
+      }
     } else if (payload.reason === 'pending_approval') {
       logger.info(`Handshake with ${payload.agentName ?? from} (${from}) awaiting user approval on the other side`);
     } else {
@@ -629,6 +653,10 @@ export class HiveSync {
   /** Called by BridgeManager once the user approves a pending handshake. */
   async completeHandshakeApproval(agentId: string): Promise<void> {
     const known = this.knownAgents.get(agentId);
+    if (isBlockedAgent(agentId, known?.signPublicKey ? fingerprint(known.signPublicKey) : undefined)) {
+      logger.warn(`Refusing to approve blocked agent ${agentId}`);
+      return;
+    }
     if (known) {
       known.handshakeStatus = 'confirmed';
       known.handshakeConfirmedAt = new Date();

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-29
+
+### Security
+- **A peer's handshake acceptance no longer makes it trusted.** A `HANDSHAKE_ACK`
+  with `accepted: true` used to mark the sender `confirmed`, so any discovered
+  peer could become trusted, with no local approval, by answering the
+  auto-initiated handshake or sending an unsolicited ack. Trust now comes only
+  from local approval (`approve`). Peers that relied on one-sided approval must
+  now be approved on both sides. **Upgrade, and review your contacts for peers
+  you never approved.**
+- Hard block for a known-malicious agent (by agentId and signing-key
+  fingerprint): its frames are dropped, it cannot be approved, and stored trust
+  for it is not restored.
+
 ## [2.0.1] - 2026-10-01
 
 ### Changed
