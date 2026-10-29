@@ -154,14 +154,15 @@ describe('Access control (handshake approval)', () => {
       expect(alpha.getHandshakeStatus('beta')?.status).toBe('confirmed');
       expect(beta.getHandshakeStatus('alpha')?.status).toBe('confirmed');
 
-      const trusted = await new Promise<boolean>((resolve) => {
+      const received = new Promise<boolean>((resolve) => {
         beta.on('text', (m) => {
           if (m.content.text === 'after re-init') resolve(true);
         });
-        void alpha.sendTextMessage('beta', 'after re-init');
         setTimeout(() => resolve(false), 5000);
       });
-      expect(trusted).toBe(true);
+      // Await the send so its outbox write finishes before teardown closes the DB.
+      await alpha.sendTextMessage('beta', 'after re-init');
+      expect(await received).toBe(true);
       expect(await beta.getQuarantineCount()).toBe(0);
     } finally {
       await alpha.stop();
