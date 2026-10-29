@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Vault sync is accepted only from confirmed contacts.** `sync_request`,
+  `sync_response` and `obsidian_update` frames were handled for any peer with a
+  valid signature, without a handshake. They are now dropped (with a `rejected`
+  ACK) unless the sender's handshake is confirmed, so an unknown peer can no
+  longer read the vault or write to it.
+- **Note paths can no longer escape the vault.** Note paths from peers were
+  joined to `vaultPath` unchecked, so a path with `..` segments could write or
+  delete any file the daemon could reach. All vault reads, writes and deletes
+  now go through one resolver. It rejects absolute paths, `..` segments, hidden
+  segments (such as `.git/hooks`, `.obsidian/plugins`), non-`.md` files and
+  symlink escapes, and it writes without following a symlink at the target.
+  **If you run with `obsidian.enabled`, upgrade, and don't run the daemon as
+  root.**
+
 ## [2.0.2] - 2026-10-29
 
 ### Security

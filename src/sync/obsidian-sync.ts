@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { isSafeVaultPath, writeVaultFile } from './vault-path';
 
 export class ObsidianSyncManager {
   private bridge: HiveSync;
@@ -135,6 +136,12 @@ export class ObsidianSyncManager {
         hash: noteData.hash,
       };
 
+      // Peer-supplied path: skip (don't store) anything outside the vault.
+      if (!isSafeVaultPath(this.vaultPath, note.path)) {
+        console.warn(`Skipping note with unsafe path ${JSON.stringify(note.path)} from ${sender}`);
+        continue;
+      }
+
       // Check for conflicts
       const existingNote = await this.storage.getNoteByPath(note.path);
       
@@ -173,6 +180,12 @@ export class ObsidianSyncManager {
       lastModified: new Date(noteData.lastModified),
       hash: noteData.hash,
     };
+
+    // Peer-supplied path: never write or store anything outside the vault.
+    if (!isSafeVaultPath(this.vaultPath, note.path)) {
+      console.warn(`Ignoring update with unsafe path ${JSON.stringify(note.path)} from ${message.sender}`);
+      return;
+    }
 
     // Save the note
     await this.saveNoteToVault(note);
@@ -249,16 +262,8 @@ export class ObsidianSyncManager {
   }
 
   private async saveNoteToVault(note: ObsidianNote): Promise<void> {
-    const fullPath = path.join(this.vaultPath, note.path);
-    const dir = path.dirname(fullPath);
-
-    // Ensure directory exists
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    // Write the note
-    fs.writeFileSync(fullPath, note.content, 'utf-8');
+    // Write the note (throws on a path outside the vault)
+    const fullPath = writeVaultFile(this.vaultPath, note.path, note.content);
 
     // Update modification time
     fs.utimesSync(fullPath, new Date(), note.lastModified);

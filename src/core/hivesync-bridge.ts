@@ -46,6 +46,14 @@ const BLOCKED_KEY_IDS: ReadonlySet<string> = new Set([
   'kGtHkwaRVGyRZOrbVMTPVPN7', // claude-code-aux
 ]);
 
+// Frame types that read or write vault files on this host. Accepted only from
+// peers with a confirmed handshake (see handleIncoming).
+const VAULT_SYNC_TYPES: ReadonlySet<string> = new Set([
+  MessageType.SYNC_REQUEST,
+  MessageType.SYNC_RESPONSE,
+  MessageType.OBSIDIAN_UPDATE,
+]);
+
 export function isBlockedAgent(agentId: string, keyId?: string): boolean {
   return BLOCKED_AGENT_IDS.has(agentId) || (keyId !== undefined && BLOCKED_KEY_IDS.has(keyId));
 }
@@ -404,6 +412,20 @@ export class HiveSync {
     };
 
     logger.debug(`Received ${message.type} from ${message.sender}`);
+
+    // Vault sync frames read and write files on this host, so only a peer whose
+    // handshake we confirmed may send them. TEXT/COMMAND are gated (quarantined)
+    // in BridgeManager; sync has nothing to quarantine, so it is dropped here,
+    // before any handler can run.
+    if (VAULT_SYNC_TYPES.has(message.type) && this.knownAgents.get(message.sender)?.handshakeStatus !== 'confirmed') {
+      logger.warn(`Dropping ${message.type} ${message.id} from ${message.sender}: not a confirmed contact`);
+      if (envelope.to === this.identity.agentId) {
+        await this.sendAck(message.id, message.sender, 'rejected').catch((e) =>
+          logger.debug('Failed to send rejected ACK:', e)
+        );
+      }
+      return;
+    }
 
     const handler = this.messageHandlers.get(message.type);
     if (!handler) {
