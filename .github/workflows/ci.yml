@@ -65,16 +65,22 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
-      id-token: write   # npm provenance (publishConfig.provenance)
+      id-token: write   # npm trusted publishing (OIDC) + provenance
     
     steps:
     - uses: actions/checkout@v4
     
+    # No registry-url: setup-node would write an .npmrc expecting
+    # NODE_AUTH_TOKEN. Auth comes from npm trusted publishing (OIDC) instead,
+    # configured on npmjs.com for this repo + ci.yml — no NPM_TOKEN secret.
     - name: Use Node.js 22.x
       uses: actions/setup-node@v4
       with:
         node-version: '22.x'
-        registry-url: 'https://registry.npmjs.org'
+    
+    # Trusted publishing needs npm >= 11.5.1; Node 22 bundles npm 10.
+    - name: Upgrade npm
+      run: npm install -g npm@^11.5.1
     
     - name: Install dependencies
       run: npm ci
@@ -87,8 +93,6 @@ jobs:
     
     - name: Publish to npm
       run: npm publish
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
