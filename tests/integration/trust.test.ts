@@ -145,11 +145,13 @@ describe('Access control (handshake approval)', () => {
       await alpha.waitForAgent('beta', 5000);
       await beta.waitForAgent('alpha', 5000);
       await approvePeerOn(beta, 'alpha');
+      await approvePeerOn(alpha, 'beta');
 
       // alpha missed beta's acceptance (lost ack / restart) and handshakes again.
       // beta must answer "accepted", not demote alpha to pending.
       await (alpha as any).hivesync.sendHandshakeInit('beta');
-      expect(await waitFor(() => alpha.getHandshakeStatus('beta')?.status === 'confirmed', 5000)).toBe(true);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(alpha.getHandshakeStatus('beta')?.status).toBe('confirmed');
       expect(beta.getHandshakeStatus('alpha')?.status).toBe('confirmed');
 
       const trusted = await new Promise<boolean>((resolve) => {
@@ -161,6 +163,32 @@ describe('Access control (handshake approval)', () => {
       });
       expect(trusted).toBe(true);
       expect(await beta.getQuarantineCount()).toBe(0);
+    } finally {
+      await alpha.stop();
+      await beta.stop();
+    }
+  }, 20000);
+
+  test("a peer's acceptance alone never makes it trusted locally", async () => {
+    const { alpha, beta, dir } = setup();
+    cleanups.push(dir);
+    try {
+      await alpha.start();
+      await beta.start();
+      await alpha.waitForAgent('beta', 5000);
+      await beta.waitForAgent('alpha', 5000);
+
+      // beta approves alpha and sends an accepted ack; alpha's user has not
+      // approved beta, so alpha must keep beta untrusted. Also covers an
+      // unsolicited accepted ack, which beta re-sends here.
+      await approvePeerOn(beta, 'alpha');
+      await (beta as any).hivesync.sendHandshakeAck('alpha', true);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(alpha.getHandshakeStatus('beta')?.status).not.toBe('confirmed');
+
+      await beta.sendTextMessage('alpha', 'trust me');
+      expect(await waitFor(async () => (await alpha.getQuarantineCount()) > 0)).toBe(true);
+      expect((await alpha.getUnreadMessages()).some((m) => m.content.text === 'trust me')).toBe(false);
     } finally {
       await alpha.stop();
       await beta.stop();
