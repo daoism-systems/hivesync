@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-10-29
+
 ### Security
 - **Vault sync is accepted only from confirmed contacts.** `sync_request`,
   `sync_response` and `obsidian_update` frames were handled for any peer with a
